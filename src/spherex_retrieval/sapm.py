@@ -18,8 +18,6 @@ to the cutout pixel box, mirroring :mod:`spherex_retrieval.wavelength`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 
@@ -37,64 +35,33 @@ class SolidAnglePixelMap:
 # SAPM cal-product discovery
 # --------------------------------------------------------------------------- #
 
-@lru_cache(maxsize=128)
 def find_sapm_product(
     detector: int,
     *,
-    backend: str = "astroquery",
+    backend: str = "astroquery",  # noqa: ARG001 — dispatch lives in cal_index
     data_release: str = "qr2",
     cal_token: str | None = None,
+    coord: "SkyCoord | None" = None,
 ) -> tuple[str, str]:
     """Return ``(http_url, s3_uri)`` for the matching SAPM file.
 
-    SAPM products are released independently of the per-pointing L2 MEFs
-    so we don't filter by processing date — the latest SAPM the SIA2
-    catalog returns for the requested detector is the right one.
+    Resolution chain (see :mod:`spherex_retrieval.cal_index`):
 
-    Parameters
-    ----------
-    detector : int
-        SPHEREx detector index 1..6.
-    cal_token : str, optional
-        Override token of the form ``cal-sapm-v{ver}-{YYYY-DDD}``.  When
-        passed, the directory-fallback branch uses it directly instead of
-        the SIA-derived value.  Useful when reproducing legacy results
-        against a fixed cal version (the SDT demo hardcodes
-        ``cal-sapm-v2-2025-164``).
+    1. ``cal_token`` if pinned by the caller (e.g. the SDT demo's
+       ``"cal-sapm-v2-2025-164"``).
+    2. SIA2 ``COLLECTION=spherex_qr2_cal`` using ``coord``.
+    3. HTML directory listing of the IRSA browsable index — picks the
+       latest ``cal-sapm-vN-YYYY-DDD`` token.
     """
-    if backend == "astroquery" and cal_token is None:
-        try:
-            from astroquery.ipac.irsa import Irsa
+    from .cal_index import discover_cal_product
 
-            raw = Irsa.query_sia(pos=None, collection=f"spherex_{data_release}_cal")
-            best = None
-            for row in raw:
-                fname = Path(str(row["access_url"])).name
-                if not fname.startswith("solid_angle_pixel_map_"):
-                    continue
-                if f"D{detector}_" not in fname:
-                    continue
-                # Pick lexicographically largest filename: SAPM filenames
-                # carry the processing date, so this picks the most recent.
-                if best is None or fname > Path(best[0]).name:
-                    http_url = str(row["access_url"])
-                    s3 = ""
-                    if "cloud_access" in row.colnames:
-                        from .query import _extract_cloud_uri  # avoid import cycle
-                        s3 = _extract_cloud_uri(row)
-                    best = (http_url, s3)
-            if best is not None:
-                return best
-        except Exception:
-            pass
-
-    # Fallback: construct the canonical browsable-directory + S3 URI.
-    token = cal_token or "cal-sapm-vLATEST-LATEST"
-    fname = f"solid_angle_pixel_map_D{detector}_spx_{token}.fits"
-    base_path = f"{data_release}/solid_angle_pixel_map/{token}/{detector}/{fname}"
-    http_url = f"https://irsa.ipac.caltech.edu/ibe/data/spherex/{base_path}"
-    s3_uri = f"s3://nasa-irsa-spherex/{base_path}"
-    return http_url, s3_uri
+    return discover_cal_product(
+        "solid_angle_pixel_map",
+        detector,
+        coord=coord,
+        cal_token=cal_token,
+        data_release=data_release,
+    )
 
 
 # --------------------------------------------------------------------------- #

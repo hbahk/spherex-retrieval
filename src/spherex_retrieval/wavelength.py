@@ -20,13 +20,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
-import astropy.units as u
 import numpy as np
 from astropy.coordinates import SkyCoord
-from astropy.io import fits
 
 from .io import open_fits
 
@@ -58,54 +55,38 @@ def parse_l2_filename(name: str) -> dict | None:
     return d
 
 
-@lru_cache(maxsize=128)
 def find_cal_product(
     detector: int,
-    processing_date: str,
+    processing_date: str = "",  # noqa: ARG001 — kept for backwards compatibility
     *,
-    backend: str = "astroquery",
+    backend: str = "astroquery",  # noqa: ARG001 — backend selection happens in cal_index
     data_release: str = "qr2",
+    coord: SkyCoord | None = None,
+    cal_token: str | None = None,
 ) -> tuple[str, str]:
     """Return ``(http_url, s3_uri)`` for the matching Spectral WCS cal file.
 
-    Tries SIA2 first (``COLLECTION=spherex_qr2_cal``).  When that does not
-    return a match, falls back to constructing the canonical browsable-
-    directory URL + the matching S3 URI on
-    ``s3://nasa-irsa-spherex/qr2/spectral_wcs/...``, following the layout
-    documented in the IRSA SPHEREx user guide.
+    Resolution chain (see :mod:`spherex_retrieval.cal_index`):
+
+    1. ``cal_token`` if pinned by the caller.
+    2. SIA2 (``COLLECTION=spherex_qr2_cal``) using ``coord`` (cal files are
+       detector-wide, so any covered position works).
+    3. HTML directory listing of the IRSA browsable index — picks the
+       latest ``cal-wcs-vN-YYYY-DDD`` token.
+
+    The L2 ``processing_date`` is **not** used as a filter here: cal
+    products are released independently from the L2 pipeline and rarely
+    share a processing date with the spectral images they apply to.
     """
-    if backend == "astroquery":
-        try:
-            from astroquery.ipac.irsa import Irsa
+    from .cal_index import discover_cal_product
 
-            raw = Irsa.query_sia(pos=None, collection=f"spherex_{data_release}_cal")
-            for row in raw:
-                fname = Path(str(row["access_url"])).name
-                if not fname.startswith("spectral_wcs_"):
-                    continue
-                if f"D{detector}_" not in fname:
-                    continue
-                if processing_date and processing_date not in fname:
-                    continue
-                http_url = str(row["access_url"])
-                s3 = ""
-                if "cloud_access" in row.colnames:
-                    from .query import _extract_cloud_uri  # local import to avoid cycle
-                    s3 = _extract_cloud_uri(row)
-                return http_url, s3
-        except Exception:
-            pass
-
-    # Browsable-directory fallback.  We don't know the cal version a priori
-    # without a directory listing — leave the version as ``LATEST`` and let
-    # the caller refine if needed.  The s3 URI follows the same layout
-    # documented in the IRSA SPHEREx archive.
-    cal_token = f"cal-wcs-vLATEST-{processing_date}"
-    fname = f"spectral_wcs_D{detector}_spx_{cal_token}.fits"
-    base_path = f"{data_release}/spectral_wcs/{cal_token}/{detector}/{fname}"
-    http_url = f"https://irsa.ipac.caltech.edu/ibe/data/spherex/{base_path}"
-    s3_uri = f"s3://nasa-irsa-spherex/{base_path}"
-    return http_url, s3_uri
+    return discover_cal_product(
+        "spectral_wcs",
+        detector,
+        coord=coord,
+        cal_token=cal_token,
+        data_release=data_release,
+    )
 
 
 # --------------------------------------------------------------------------- #
