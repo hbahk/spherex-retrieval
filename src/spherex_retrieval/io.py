@@ -45,29 +45,65 @@ def is_s3_uri(target: str) -> bool:
     return target.startswith("s3://") or target.startswith("gs://")
 
 
-def http_download(url: str, dest: Path, timeout: float = 120.0) -> Path:
-    """Download ``url`` to ``dest`` atomically; return the final path."""
+_RETRYABLE_STATUS = {500, 502, 503, 504}
+
+
+def http_download(
+    url: str,
+    dest: Path,
+    *,
+    timeout: float = 120.0,
+    max_retries: int = 4,
+    backoff: float = 2.0,
+) -> Path:
+    """Download ``url`` to ``dest`` atomically; return the final path.
+
+    Retries on transient network failures and 5xx server errors with
+    exponential backoff (``backoff * 2**attempt`` seconds, jittered by
+    ±20 %).  IRSA's ibe service occasionally returns 503 under load; this
+    loop hides those from callers.
+    """
+    import random
+    import time
+
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and dest.stat().st_size > 0:
         return dest
 
-    with tempfile.NamedTemporaryFile(
-        delete=False, dir=dest.parent, prefix=dest.name + ".", suffix=".part"
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
-        with requests.get(url, stream=True, timeout=timeout) as resp:
-            resp.raise_for_status()
-            with open(tmp_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=1 << 20):
-                    if chunk:
-                        f.write(chunk)
-        shutil.move(str(tmp_path), str(dest))
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-    return dest
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        with tempfile.NamedTemporaryFile(
+            delete=False, dir=dest.parent, prefix=dest.name + ".", suffix=".part"
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            with requests.get(url, stream=True, timeout=timeout) as resp:
+                if resp.status_code in _RETRYABLE_STATUS:
+                    raise requests.HTTPError(
+                        f"{resp.status_code} {resp.reason} for {url}", response=resp
+                    )
+                resp.raise_for_status()
+                with open(tmp_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1 << 20):
+                        if chunk:
+                            f.write(chunk)
+            shutil.move(str(tmp_path), str(dest))
+            return dest
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as exc:
+            last_exc = exc
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            # Don't retry on 4xx (except 408 Request Timeout, 429 Too Many Requests).
+            if status is not None and status not in _RETRYABLE_STATUS and status not in (408, 429):
+                raise
+            if attempt == max_retries - 1:
+                raise
+            sleep_s = backoff * (2 ** attempt) * random.uniform(0.8, 1.2)
+            time.sleep(sleep_s)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+    raise RuntimeError(f"http_download exhausted retries for {url}") from last_exc
 
 
 @contextmanager

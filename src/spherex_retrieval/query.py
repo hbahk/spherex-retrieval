@@ -23,8 +23,24 @@ from __future__ import annotations
 from typing import Literal
 
 import astropy.units as u
+import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
+
+
+def _empty_canonical_table() -> Table:
+    """Empty table with the canonical schema and dtypes."""
+    return Table(
+        {
+            "access_url": np.array([], dtype=str),
+            "cloud_uri": np.array([], dtype=str),
+            "obs_id": np.array([], dtype=str),
+            "bandpass": np.array([], dtype=str),
+            "detector": np.array([], dtype=np.int32),
+            "time_bounds_lower": np.array([], dtype=np.float64),
+            "collection": np.array([], dtype=str),
+        }
+    )
 
 CollectionName = Literal["spherex_qr2", "spherex_qr2_deep", "spherex_qr2_cal"]
 SUPPORTED_COLLECTIONS = ("spherex_qr2", "spherex_qr2_deep")
@@ -58,27 +74,49 @@ def query_sia2(
 
 
 def _normalize_sia2_table(raw: Table, *, collection: str) -> Table:
-    """Map the raw SIA2 columns to the canonical schema."""
-    out = Table()
-    out["access_url"] = [str(s) for s in raw["access_url"]]
-    out["cloud_uri"] = [_extract_cloud_uri(row) for row in raw]
-    out["obs_id"] = [
-        str(s) for s in raw.get("obs_id", raw.get("dataproduct_subtype", [""] * len(raw)))
-    ]
+    """Map the raw SIA2 columns to the canonical schema.
+
+    All columns are typed explicitly so that empty results still merge
+    correctly with non-empty results in :func:`find_overlapping`.
+    """
+    n = len(raw)
+    if n == 0:
+        return _empty_canonical_table()
+
+    if "obs_id" in raw.colnames:
+        obs_ids = [str(s) for s in raw["obs_id"]]
+    elif "dataproduct_subtype" in raw.colnames:
+        obs_ids = [str(s) for s in raw["dataproduct_subtype"]]
+    else:
+        obs_ids = [""] * n
+
     if "energy_bandpassname" in raw.colnames:
         bandpasses = [str(s) for s in raw["energy_bandpassname"]]
     else:
-        bandpasses = [""] * len(raw)
-    out["bandpass"] = bandpasses
-    out["detector"] = [_detector_from_bandpass(s) for s in bandpasses]
+        bandpasses = [""] * n
+
     if "t_min" in raw.colnames:
-        out["time_bounds_lower"] = raw["t_min"]
+        time_lower = np.asarray(raw["t_min"], dtype=np.float64)
     elif "time_bounds_lower" in raw.colnames:
-        out["time_bounds_lower"] = raw["time_bounds_lower"]
+        time_lower = np.asarray(raw["time_bounds_lower"], dtype=np.float64)
     else:
-        out["time_bounds_lower"] = [float("nan")] * len(raw)
-    out["collection"] = [collection] * len(raw)
-    return out
+        time_lower = np.full(n, np.nan, dtype=np.float64)
+
+    return Table(
+        {
+            "access_url": np.asarray([str(s) for s in raw["access_url"]], dtype=str),
+            "cloud_uri": np.asarray(
+                [_extract_cloud_uri(row) for row in raw], dtype=str
+            ),
+            "obs_id": np.asarray(obs_ids, dtype=str),
+            "bandpass": np.asarray(bandpasses, dtype=str),
+            "detector": np.asarray(
+                [_detector_from_bandpass(s) for s in bandpasses], dtype=np.int32
+            ),
+            "time_bounds_lower": time_lower,
+            "collection": np.asarray([collection] * n, dtype=str),
+        }
+    )
 
 
 def _extract_cloud_uri(row) -> str:
@@ -164,19 +202,30 @@ def query_tap(
     ORDER BY p.time_bounds_lower
     """
     raw = service.search(adql).to_table()
+    n = len(raw)
+    if n == 0:
+        return _empty_canonical_table()
 
-    out = Table()
-    out["access_url"] = [
-        f"https://irsa.ipac.caltech.edu/{p.lstrip('/')}" for p in raw["access_path"]
-    ]
-    out["cloud_uri"] = [""] * len(raw)
-    out["obs_id"] = [str(s) for s in raw["obs_id"]]
     bandpasses = [str(s) for s in raw["energy_bandpassname"]]
-    out["bandpass"] = bandpasses
-    out["detector"] = [_detector_from_bandpass(s) for s in bandpasses]
-    out["time_bounds_lower"] = raw["time_bounds_lower"]
-    out["collection"] = [collection] * len(raw)
-    return out
+    return Table(
+        {
+            "access_url": np.asarray(
+                [f"https://irsa.ipac.caltech.edu/{p.lstrip('/')}"
+                 for p in raw["access_path"]],
+                dtype=str,
+            ),
+            "cloud_uri": np.asarray([""] * n, dtype=str),
+            "obs_id": np.asarray([str(s) for s in raw["obs_id"]], dtype=str),
+            "bandpass": np.asarray(bandpasses, dtype=str),
+            "detector": np.asarray(
+                [_detector_from_bandpass(s) for s in bandpasses], dtype=np.int32
+            ),
+            "time_bounds_lower": np.asarray(
+                raw["time_bounds_lower"], dtype=np.float64
+            ),
+            "collection": np.asarray([collection] * n, dtype=str),
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -196,18 +245,15 @@ def find_overlapping(
     tables = []
     for col in collections:
         if backend == "astroquery":
-            tables.append(
-                query_sia2(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
-            )
+            t = query_sia2(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
         elif backend == "pyvo":
-            tables.append(
-                query_tap(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
-            )
+            t = query_tap(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
         else:
             raise ValueError(f"unknown query backend: {backend!r}")
+        if len(t) > 0:
+            tables.append(t)
     if not tables:
-        return Table(names=("access_url", "cloud_uri", "obs_id", "bandpass",
-                            "detector", "time_bounds_lower", "collection"))
+        return _empty_canonical_table()
     from astropy.table import vstack
     combined = vstack(tables)
     combined.sort("time_bounds_lower")

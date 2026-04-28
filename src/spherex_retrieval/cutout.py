@@ -62,7 +62,9 @@ def build_irsa_cutout_url(access_url: str, coord: SkyCoord, size: u.Quantity) ->
     dec = coord.icrs.dec.to_value(u.deg)
     size_deg = size.to_value(u.deg)
     sep = "&" if "?" in access_url else "?"
-    return f"{access_url}{sep}center={ra},{dec}&size={size_deg}"
+    # IRSA's ibe cutout endpoint requires an explicit unit suffix on
+    # ``size`` (accepted units include 'deg', 'arcsec', 'pixel', ...).
+    return f"{access_url}{sep}center={ra},{dec}&size={size_deg}deg"
 
 
 def fetch_irsa_cutout(

@@ -15,7 +15,7 @@ from .cutout import CutoutBackend, fetch_cutout
 from .psf import fix_psf_header_if_needed, subset_zones_for_cutout
 from .query import SUPPORTED_COLLECTIONS, find_overlapping
 from .sapm import crop_sapm, find_sapm_product
-from .wavelength import crop_wavelength_maps, find_cal_product, parse_l2_filename
+from .wavelength import crop_wavelength_maps, find_cal_product
 
 QueryBackend = Literal["astroquery", "pyvo"]
 
@@ -198,10 +198,8 @@ def _retrieve_one(
 
     if include_wavelength and bundle.cutout is not None:
         try:
-            meta = parse_l2_filename(bundle.access_url) or {}
-            proc_date = meta.get("date", "")
             cal_http, cal_s3 = find_cal_product(
-                bundle.detector, proc_date, backend=query_backend
+                bundle.detector, backend=query_backend, coord=coord
             )
             cal_target = cal_s3 if (cutout_backend == "fsspec" and cal_s3) else cal_http
             bundle.wavelength = crop_wavelength_maps(
@@ -218,7 +216,10 @@ def _retrieve_one(
     if include_sapm and bundle.cutout is not None:
         try:
             sapm_http, sapm_s3 = find_sapm_product(
-                bundle.detector, backend=query_backend, cal_token=sapm_cal_token
+                bundle.detector,
+                backend=query_backend,
+                cal_token=sapm_cal_token,
+                coord=coord,
             )
             sapm_target = (
                 sapm_s3 if (cutout_backend == "fsspec" and sapm_s3) else sapm_http
