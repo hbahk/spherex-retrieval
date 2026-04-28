@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spherex-retrieval"
+version = "0.1.0"
+description = "Cutout retrieval for SPHEREx Spectral Image MEFs with side data needed for forced photometry."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "hbahk" }]
+dependencies = [
+    "astropy>=6.0",
+    "astroquery>=0.4.7",
+    "pyvo>=1.5",
+    "numpy>=1.24",
+    "packaging>=21.0",
+    "requests>=2.31",
+    "fsspec>=2024.2",
+    "s3fs>=2024.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov"]
+
+[project.scripts]
+spherex-retrieve = "spherex_retrieval.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
