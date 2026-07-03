@@ -104,6 +104,13 @@ def crop_wavelength_maps(
     """Open the cal product and crop CWAVE/CBAND to the cutout bbox."""
     xlo, ylo = pixel_origin
     ny, nx = cutout_shape
+    # A negative origin would make .section[ylo:ylo+ny] wrap around to the
+    # mirrored detector rows (silent within-detector wavelength reversal);
+    # fail loudly instead.  pixel_origin must be a true 0-based detector origin.
+    if xlo < 0 or ylo < 0:
+        raise ValueError(
+            f"pixel_origin must be non-negative detector pixels, got {pixel_origin!r}"
+        )
 
     with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
                    fsspec_kwargs=fsspec_kwargs) as hdul:
