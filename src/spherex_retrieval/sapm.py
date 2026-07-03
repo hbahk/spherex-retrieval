@@ -79,6 +79,12 @@ def crop_sapm(
     """Open the SAPM cal product and crop to the cutout pixel bbox."""
     xlo, ylo = pixel_origin
     ny, nx = cutout_shape
+    # A negative origin would wrap .section[ylo:ylo+ny] to the mirrored
+    # detector rows; fail loudly (see crop_wavelength_maps for the rationale).
+    if xlo < 0 or ylo < 0:
+        raise ValueError(
+            f"pixel_origin must be non-negative detector pixels, got {pixel_origin!r}"
+        )
     with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
                    fsspec_kwargs=fsspec_kwargs) as hdul:
         sapm_hdu = hdul["IMAGE"] if "IMAGE" in hdul else hdul[1]

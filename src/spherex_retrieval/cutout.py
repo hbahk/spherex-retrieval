@@ -90,9 +90,17 @@ def _payload_from_irsa_hdul(hdul: fits.HDUList) -> CutoutPayload:
     header = image_hdu.header
     crpix1a = int(round(header.get("CRPIX1A", 1)))
     crpix2a = int(round(header.get("CRPIX2A", 1)))
-    # CRPIX*A are 1-based pixel positions of cutout (0,0) in the original
-    # detector frame.  Convert to a 0-based origin.
-    pixel_origin = (crpix1a - 1, crpix2a - 1)
+    # CRPIX*A give the cutout's alternate 'A' (detector-pixel) WCS, whose
+    # reference point sits at detector pixel (1,1).  The 0-based detector
+    # origin of cutout pixel (0,0) is therefore -(CRPIX*A - 1), i.e. the
+    # negation of the naive (CRPIX*A - 1): equivalently the (ix,iy) -> detector
+    # mapping is (-(CRPIX1A-1)+ix, -(CRPIX2A-1)+iy), matching cutout_to_orig()
+    # and verified to the decimal against the L2 spatial WCS.  For off-origin
+    # cutouts CRPIX*A is <= 1 (often strongly negative, e.g. -1839), so the old
+    # (CRPIX*A - 1) made the origin negative and the cal-product crop
+    # section[ylo:ylo+ny] negative-wrapped to the vertically MIRRORED detector
+    # rows -> a within-detector CWAVE reversal (and mis-picked PSF zones / SAPM).
+    pixel_origin = (1 - crpix1a, 1 - crpix2a)
 
     return CutoutPayload(
         image=np.array(image_hdu.data, copy=True),
