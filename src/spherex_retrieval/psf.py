@@ -76,14 +76,30 @@ def nearest_zone(x_orig: float, y_orig: float, table: Table) -> int:
     return int(table["zone_id"][np.argmin(dx * dx + dy * dy)])
 
 
+ZONE_MARGIN_DEFAULT = 1
+
+
 def subset_zones_for_cutout(
     psf_cube: np.ndarray,
     psf_header: fits.Header,
     *,
     cutout_shape: tuple[int, int],     # (ny, nx)
     pixel_origin: tuple[int, int],     # (xlo, ylo) in 0-based detector pixels
+    zone_margin: int = ZONE_MARGIN_DEFAULT,
 ) -> PSFZoneSubset:
-    """Slice the PSF cube down to zones overlapping the cutout bbox."""
+    """Slice the PSF cube down to zones overlapping the cutout bbox.
+
+    ``zone_margin`` widens the retained rectangle by that many zones on every
+    side (clipped to the 11x11 lattice). Without it the rectangle spans only
+    the zones nearest the cutout's two corners, so a cutout smaller than the
+    ~185 detector px zone pitch keeps a SINGLE plane — enough to pick a
+    nearest-zone PSF, but not enough to interpolate between zones, which
+    downstream forced photometry wants (a tile can otherwise sit ~93 px from
+    the kernel it uses). One margin ring takes a small cutout from 1 plane to
+    up to 9; each plane is 101x101 float32 = 41 kB, so the cost is ~0.4 MB
+    per cutout. Pass ``zone_margin=0`` to reproduce bundles written before
+    this default changed.
+    """
     table = build_zone_table(psf_header)
 
     ny, nx = cutout_shape
@@ -99,6 +115,12 @@ def subset_zones_for_cutout(
         zx_ll, zx_ur = zx_ur, zx_ll
     if zy_ur < zy_ll:
         zy_ll, zy_ur = zy_ur, zy_ll
+
+    m = max(int(zone_margin), 0)
+    zx_ll = max(int(zx_ll) - m, int(ZONE_X_INDEX.min()))
+    zx_ur = min(int(zx_ur) + m, int(ZONE_X_INDEX.max()))
+    zy_ll = max(int(zy_ll) - m, int(ZONE_Y_INDEX.min()))
+    zy_ur = min(int(zy_ur) + m, int(ZONE_Y_INDEX.max()))
 
     sel = (
         (ZONE_X_INDEX >= zx_ll)

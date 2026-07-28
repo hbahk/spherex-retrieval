@@ -12,7 +12,8 @@ from astropy.table import Row
 
 from .bundle import Bundle, RetrievalStatus, cutout_filename, write_bundle, write_summary
 from .cutout import CutoutBackend, fetch_cutout
-from .psf import fix_psf_header_if_needed, subset_zones_for_cutout
+from .psf import (ZONE_MARGIN_DEFAULT, fix_psf_header_if_needed,
+                  subset_zones_for_cutout)
 from .query import SUPPORTED_COLLECTIONS, find_overlapping
 from .sapm import crop_sapm, find_sapm_product
 from .wavelength import crop_wavelength_maps, find_cal_product
@@ -40,6 +41,7 @@ def retrieve(
     include_sapm: bool = False,
     sapm_cal_token: str | None = None,
     subset_psf: bool = True,
+    zone_margin: int = ZONE_MARGIN_DEFAULT,
     max_workers: int = 8,
     cache_dir: Path | str | None = None,
     fsspec_kwargs: dict | None = None,
@@ -104,6 +106,7 @@ def retrieve(
             include_sapm=include_sapm,
             sapm_cal_token=sapm_cal_token,
             subset_psf=subset_psf,
+            zone_margin=zone_margin,
             cache_dir=cache_dir,
             fsspec_kwargs=fsspec_kwargs,
             query_backend=query_backend,
@@ -139,6 +142,7 @@ def _retrieve_one(
     include_sapm: bool,
     sapm_cal_token: str | None,
     subset_psf: bool,
+    zone_margin: int = ZONE_MARGIN_DEFAULT,
     cache_dir: Path | None,
     fsspec_kwargs: dict | None,
     query_backend: QueryBackend,
@@ -192,6 +196,7 @@ def _retrieve_one(
                 bundle.cutout.psf_header,
                 cutout_shape=bundle.cutout.image.shape,
                 pixel_origin=bundle.cutout.pixel_origin,
+                zone_margin=zone_margin,
             )
         except Exception as exc:
             bundle.message = f"psf subset failed: {exc}"

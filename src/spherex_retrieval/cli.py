@@ -50,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pin SAPM cal version (e.g. cal-sapm-v2-2025-164).",
     )
     p.add_argument("--no-psf-subset", action="store_true", help="Keep all 121 PSF planes.")
+    p.add_argument("--zone-margin", type=int, default=1,
+                        help="widen the retained PSF-zone rectangle by N zones on "
+                             "every side so downstream photometry can interpolate "
+                             "between zones; 0 reproduces pre-2026-07-28 bundles")
     p.add_argument("--max-workers", type=int, default=8)
     p.add_argument("--cache-dir", type=Path, default=None)
     return p
@@ -77,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         include_sapm=args.include_sapm,
         sapm_cal_token=args.sapm_cal_token,
         subset_psf=not args.no_psf_subset,
+        zone_margin=args.zone_margin,
         max_workers=args.max_workers,
         cache_dir=args.cache_dir,
     )
