@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+import warnings
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
@@ -290,8 +291,14 @@ def resample_psf_to_native(
     sub_pixel_shift : (dx, dy)
         Source's sub-pixel offset *in native pixels* (0..1 each).
     output_size : int, optional
-        Side length of the output PSF in native pixels.  Defaults to
-        ``floor(N / oversamp)`` (10 for the QR-2 default).
+        Side length of the output PSF in native pixels.  Defaults to the
+        smallest ODD size covering the input, ``11`` for the QR-2 default
+        (101 oversampled px = 10.1 native px).  The size must be odd for the
+        result to be centred at all: the PSF centre lands on output index
+        ``output_size // 2``, and only for odd sizes is that the array's
+        geometric centre.  An even size is accepted but warns, because a
+        caller using the usual "array centre = source position" convention
+        would then be off by half a native pixel.
     normalize : bool
         If True (default), rescale to sum to 1.
     """
@@ -301,29 +308,92 @@ def resample_psf_to_native(
     n_over = arr.shape[0]
     if output_size is None:
         output_size = n_over // oversamp
+        if output_size % 2 == 0:
+            output_size += 1
+    elif output_size % 2 == 0:
+        warnings.warn(
+            f"output_size={output_size} is even, so the PSF centre lands on "
+            f"index {output_size // 2} while the array's geometric centre is "
+            f"{(output_size - 1) / 2} — half a native pixel apart. Pass an "
+            "odd output_size unless you are tracking that offset yourself.",
+            stacklevel=2,
+        )
 
     # Apply a sub-pixel shift in oversampled units.
     dx_over = sub_pixel_shift[0] * oversamp
     dy_over = sub_pixel_shift[1] * oversamp
     shifted = _shift_image(arr, dx=dx_over, dy=dy_over)
 
-    # Block-integrate down to native pixels.
-    needed = output_size * oversamp
-    if needed > n_over:
-        pad = needed - n_over
-        shifted = np.pad(shifted, ((0, pad), (0, pad)), mode="constant")
-    elif needed < n_over:
-        # Crop centred to the integer block.
-        start = (n_over - needed) // 2
-        shifted = shifted[start:start + needed, start:start + needed]
-    out = shifted.reshape(
-        output_size, oversamp, output_size, oversamp
-    ).sum(axis=(1, 3))
+    # Pixel-integrate onto a grid CENTRED on the array centre (see
+    # _integrate_centred).  The previous implementation reshaped into
+    # ``output_size x oversamp`` blocks aligned to index 0, which forced two
+    # asymmetries whenever ``output_size * oversamp != n_over``: it cropped
+    # with ``start = (n_over - needed) // 2`` -- for the QR-2 default
+    # 101 -> 100 that drops only the LAST row and column, not a centred crop --
+    # and it padded with ``((0, pad), (0, pad))``, i.e. entirely on the
+    # bottom/right.  Either one displaces the PSF relative to the output array
+    # centre by a fraction of an oversampled pixel, which a forced-photometry
+    # caller then reads as an astrometric offset.
+    out = _integrate_centred(shifted, oversamp=oversamp,
+                             output_size=output_size)
 
     if normalize:
         s = out.sum()
         if s > 0:
             out = out / s
+    return out
+
+
+def _integrate_centred(
+    arr: np.ndarray, *, oversamp: int, output_size: int
+) -> np.ndarray:
+    """Pixel-integrate an oversampled image onto a grid centred on its centre.
+
+    Output pixel ``m`` integrates the continuous window of width ``oversamp``
+    centred on input index ``c + oversamp * (m - output_size // 2)``, where
+    ``c = (n - 1) / 2`` is the input's geometric centre.  So:
+
+    * the output grid is uniform, spacing exactly ``oversamp`` input px;
+    * output index ``output_size // 2`` is centred on the input centre, for any
+      combination of input size, ``oversamp`` and ``output_size`` parities;
+    * flux is conserved up to what falls outside the array (zero-padded).
+
+    Parity is handled by weights rather than by cropping.  A width-``oversamp``
+    window centred on a pixel centre covers whole pixels when ``oversamp`` is
+    odd, and covers two half-pixels at its ends when ``oversamp`` is even (for
+    ``oversamp=10``: weights ``0.5, 1 x 9, 0.5``, summing to 10).  Reshaping
+    into aligned blocks, as the previous implementation did, cannot express
+    that half-pixel and so had to crop or pad asymmetrically instead.
+    """
+    a = np.asarray(arr, dtype=np.float64)
+    n = a.shape[0]
+    half = oversamp / 2.0
+    # weight of input pixel j (covering [j-0.5, j+0.5]) inside a window of
+    # width `oversamp` centred at 0 -> overlap length, computed once
+    off = np.arange(-int(np.ceil(half)), int(np.ceil(half)) + 1)
+    w = np.clip(np.minimum(off + 0.5, half) - np.maximum(off - 0.5, -half),
+                0.0, None)
+    c = (n - 1) / 2.0
+    centres = c + oversamp * (np.arange(output_size) - output_size // 2)
+    # nearest input index to each window centre, plus the fractional remainder
+    base = np.rint(centres).astype(int)
+    frac = centres - base
+    if np.any(np.abs(frac) > 1e-9):
+        # window centres land between input pixels: interpolate the weights
+        idx = base[:, None] + off[None, :]
+        wgt = np.empty((output_size, off.size), dtype=np.float64)
+        for m in range(output_size):
+            d = off - frac[m]
+            wgt[m] = np.clip(np.minimum(d + 0.5, half)
+                             - np.maximum(d - 0.5, -half), 0.0, None)
+    else:
+        idx = base[:, None] + off[None, :]
+        wgt = np.broadcast_to(w, (output_size, off.size))
+    ok = (idx >= 0) & (idx < n)
+    safe = np.where(ok, idx, 0)
+    # separable: apply along axis 0 then axis 1
+    rows = np.einsum("mk,mkj->mj", wgt * ok, a[safe, :])
+    out = np.einsum("nk,mnk->mn", wgt * ok, rows[:, safe])
     return out
 
 
