@@ -102,6 +102,7 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
             "True if PSF erratum fix was applied locally",
         )
         h["OVERSAMP"] = (bundle.cutout.psf_oversamp, "PSF oversampling factor")
+        h["PSFSRC"] = (bundle.cutout.psf_source[:68], "PSF cube origin")
 
     cut = bundle.cutout
     image_hdu = fits.ImageHDU(cut.image, header=cut.image_header, name="IMAGE")

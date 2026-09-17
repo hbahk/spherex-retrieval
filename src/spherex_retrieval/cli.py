@@ -54,6 +54,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="widen the retained PSF-zone rectangle by N zones on "
                              "every side so downstream photometry can interpolate "
                              "between zones; 0 reproduces pre-2026-07-28 bundles")
+    p.add_argument("--psf-source", choices=["cal", "l2"], default="cal",
+                   help="cal: take the PSF cube from the per-detector average_psf cal "
+                        "product and stop each cutout download before the PSF data "
+                        "(~97%% fewer bytes); l2: download the cube with every cutout")
+    p.add_argument("--psf-verify-every", type=int, default=200,
+                   help="with --psf-source cal, download every N-th cutout per detector "
+                        "in full and compare its PSF cube with the cal product "
+                        "(0 = first cutout only)")
+    p.add_argument("--psf-cal-token", default=None,
+                   help="Pin PSF cal version (e.g. cal-psf-v5-2026-082).")
     p.add_argument("--max-workers", type=int, default=8)
     p.add_argument("--cache-dir", type=Path, default=None)
     return p
@@ -82,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
         sapm_cal_token=args.sapm_cal_token,
         subset_psf=not args.no_psf_subset,
         zone_margin=args.zone_margin,
+        psf_source=args.psf_source,
+        psf_verify_every=args.psf_verify_every,
+        psf_cal_token=args.psf_cal_token,
         max_workers=args.max_workers,
         cache_dir=args.cache_dir,
     )
