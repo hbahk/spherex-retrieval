@@ -14,6 +14,8 @@ from .bundle import Bundle, RetrievalStatus, cutout_filename, write_bundle, writ
 from .cutout import CutoutBackend, fetch_cutout
 from .psf import (ZONE_MARGIN_DEFAULT, fix_psf_header_if_needed,
                   subset_zones_for_cutout)
+from .psf_shared import (PSF_VERIFY_EVERY_DEFAULT, PsfSource, SharedPsfRegistry,
+                         get_registry)
 from .query import SUPPORTED_COLLECTIONS, find_overlapping
 from .sapm import crop_sapm, find_sapm_product
 from .wavelength import crop_wavelength_maps, find_cal_product
@@ -42,6 +44,9 @@ def retrieve(
     sapm_cal_token: str | None = None,
     subset_psf: bool = True,
     zone_margin: int = ZONE_MARGIN_DEFAULT,
+    psf_source: PsfSource = "cal",
+    psf_verify_every: int = PSF_VERIFY_EVERY_DEFAULT,
+    psf_cal_token: str | None = None,
     max_workers: int = 8,
     cache_dir: Path | str | None = None,
     fsspec_kwargs: dict | None = None,
@@ -63,6 +68,21 @@ def retrieve(
         Pin the SAPM cal version, e.g. ``'cal-sapm-v2-2025-164'``.  When
         omitted, the latest SAPM available via SIA2 for each detector is
         used.
+    psf_source : {"cal", "l2"}
+        ``"cal"`` (default) takes the 121-plane PSF cube from the
+        per-detector ``average_psf`` cal product, fetched once, and stops
+        each cutout download right after the PSF header — the cube is
+        identical in every L2 file of a detector and is ~97 % of a small
+        cutout's bytes.  The PSF *header* (zone table) still comes from the
+        L2 file.  ``"l2"`` downloads the cube with every cutout, as before.
+        The output primary header records the choice in ``PSFSRC``.
+    psf_verify_every : int
+        With ``psf_source="cal"``, the first cutout of each detector and
+        every N-th one after it is downloaded in full and its cube compared
+        with the cal product; a mismatch switches that detector back to full
+        downloads with a warning.  ``0`` checks the first cutout only.
+    psf_cal_token : str, optional
+        Pin the PSF cal version, e.g. ``'cal-psf-v5-2026-082'``.
     remote_timeout : float
         Sets ``astropy.utils.data.conf.remote_timeout``; SPHEREx reads
         often exceed the default, hence 120 s is the recommended floor
@@ -84,6 +104,18 @@ def retrieve(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cache_dir = Path(cache_dir) if cache_dir else None
+
+    if psf_source not in ("cal", "l2"):
+        raise ValueError(f"unknown psf_source: {psf_source!r}")
+    psf_registry = None
+    if psf_source == "cal":
+        psf_registry = get_registry(
+            verify_every=psf_verify_every,
+            cal_token=psf_cal_token,
+            cache_dir=cache_dir,
+            use_s3=(cutout_backend == "fsspec"),
+            fsspec_kwargs=fsspec_kwargs,
+        )
 
     overlap = find_overlapping(
         coord, size,
@@ -107,6 +139,7 @@ def retrieve(
             sapm_cal_token=sapm_cal_token,
             subset_psf=subset_psf,
             zone_margin=zone_margin,
+            psf_registry=psf_registry,
             cache_dir=cache_dir,
             fsspec_kwargs=fsspec_kwargs,
             query_backend=query_backend,
@@ -143,6 +176,7 @@ def _retrieve_one(
     sapm_cal_token: str | None,
     subset_psf: bool,
     zone_margin: int = ZONE_MARGIN_DEFAULT,
+    psf_registry: SharedPsfRegistry | None = None,
     cache_dir: Path | None,
     fsspec_kwargs: dict | None,
     query_backend: QueryBackend,
@@ -167,6 +201,8 @@ def _retrieve_one(
             backend=cutout_backend,
             cache_dir=cache_dir,
             fsspec_kwargs=fsspec_kwargs,
+            psf_registry=psf_registry,
+            detector=bundle.detector,
         )
     except Exception as exc:
         bundle.status = RetrievalStatus.DOWNLOAD_FAILED

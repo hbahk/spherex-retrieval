@@ -14,6 +14,7 @@ and per-pixel wavelength / bandpass maps drawn from the standalone Spectral WCS 
 - [Side data: SAPM (MJy/sr → µJy)](#side-data-sapm-mjysr--%C2%B5jy)
 - [Notes](#notes)
   - [Wavelength source](#wavelength-source)
+  - [Shared PSF cube (`psf_source="cal"`)](#shared-psf-cube-psf_sourcecal)
   - [PSF erratum (VERSION ≤ 6.5.5)](#psf-erratum-version--655)
   - [Status codes](#status-codes)
 - [References](#references)
@@ -70,7 +71,7 @@ Each per-cutout MEF:
 
 | HDU | name      | content                                                          |
 |-----|-----------|------------------------------------------------------------------|
-| 0   | PRIMARY   | provenance — `OBSID`, `DETECTOR`, `RA_REQ`, `DEC_REQ`, `STATUS`, `VERSION`, `PSFFIXED`, `OVERSAMP` |
+| 0   | PRIMARY   | provenance — `OBSID`, `DETECTOR`, `RA_REQ`, `DEC_REQ`, `STATUS`, `VERSION`, `PSFFIXED`, `OVERSAMP`, `PSFSRC` |
 | 1   | IMAGE     | calibrated surface brightness (MJy/sr), cropped                  |
 | 2   | FLAGS     | per-pixel bitmap                                                 |
 | 3   | VARIANCE  | (MJy/sr)²                                                        |
@@ -91,6 +92,7 @@ Each per-cutout MEF:
 | Cutout     | `cutout_backend="irsa"` (server-side cutout) | `"fsspec"` byte-range over HTTP or `s3://`     |
 | Wavelength | `include_wavelength=True` (CWAVE/CBAND) | `False` to skip                                     |
 | PSF        | `subset_psf=True` (overlapping zones only) | `False` to keep all 121 planes                   |
+| PSF cube   | `psf_source="cal"` (one `average_psf` cube per detector, cutout download stops before the PSF data) | `"l2"` to download the cube with every cutout; `psf_verify_every=N`, `psf_cal_token=...` |
 | Bandpass   | all detectors         | `bandpass="SPHEREx-D2"` (filter applied at query time)                |
 | SAPM       | `include_sapm=False`  | `True` to fetch + crop Solid Angle Pixel Map (arcsec²)                |
 | Survey     | `("spherex_qr2", "spherex_qr2_deep")` | restrict via `collections=(...)`                      |
@@ -169,6 +171,31 @@ The Explanatory Supplement explicitly flags the L2 `WCS-WAVE` lookup table as **
 (`CWAVE` + `CBAND`) for science.  This package uses the latter: the matching cal file is located
 via SIA2 (`COLLECTION=spherex_qr2_cal`) and cropped to the same pixel box as the science cutout
 using `.section[ylo:..., xlo:...]`, so cloud reads only fetch the relevant pixel slab.
+
+### Shared PSF cube (`psf_source="cal"`)
+
+The 121×101×101 PSF cube in an L2 file is a per-detector calibration constant: it is
+byte-identical to the `PSF-DATA-CUBE` of the standalone
+[`average_psf`](https://irsa.ipac.caltech.edu/ibe/data/spherex/qr2/average_psf) cal product
+(checked on all six detectors, 1,370 cutouts across pipeline `VERSION` 6.4 – 6.5.7). IRSA's
+cutout service passes it through uncropped, so a small cutout is 4.94 MB of PSF out of ~5.1 MB,
+re-sent on every request.
+
+With `psf_source="cal"` (default) the cube is fetched once per detector from the cal product
+and each cutout download hangs up right after the PSF *header* (~0.12 MB; the service ignores
+`Range`, so closing the stream is the only way). The PSF header — the zone table and its
+erratum handling — still comes from the L2 file, and the written bundles are identical to
+`psf_source="l2"` apart from the `PSFSRC` keyword (`l2` or `cal:<file>`). Partial downloads are
+not written to the HTTP cache.
+
+The two published cal versions, `cal-psf-v5-2025-206` and `cal-psf-v5-2026-082`, hold the same
+cube; the later one is a header reissue (zone-centre `XCTR_i`/`YCTR_i` X↔Y erratum fixed,
+`VERSION`/`DATE` added).
+
+No L2 keyword names the PSF cal a file was built with, so the identity is sampled rather than
+assumed: the first cutout of each detector in a process, and every `psf_verify_every`-th (200)
+after it, is downloaded in full and compared with the cal cube. A mismatch emits a
+`RuntimeWarning` and switches that detector back to full downloads.
 
 ### PSF erratum (VERSION ≤ 6.5.5)
 

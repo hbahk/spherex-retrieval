@@ -22,11 +22,12 @@ import requests
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-CalFamily = Literal["spectral_wcs", "solid_angle_pixel_map"]
+CalFamily = Literal["spectral_wcs", "solid_angle_pixel_map", "average_psf"]
 
 _FAMILY_PREFIX = {
     "spectral_wcs": "cal-wcs",
     "solid_angle_pixel_map": "cal-sapm",
+    "average_psf": "cal-psf",
 }
 
 
@@ -159,7 +160,33 @@ def latest_cal_token_via_listing(
 # Public entry point
 # --------------------------------------------------------------------------- #
 
+_DISCOVERED: dict[tuple, tuple[str, str]] = {}
+
+
 def discover_cal_product(
+    family: CalFamily,
+    detector: int,
+    *,
+    coord: SkyCoord | None = None,
+    cal_token: str | None = None,
+    data_release: str = "qr2",
+) -> tuple[str, str]:
+    """Memoised :func:`_discover_cal_product`.
+
+    Cal products are detector-wide, so the answer does not depend on
+    ``coord``; one SIA2 round trip (0.6-3 s) per (family, detector) per
+    process instead of one per cutout.  Failures are not cached.
+    """
+    key = (family, detector, cal_token, data_release)
+    hit = _DISCOVERED.get(key)
+    if hit is None:
+        hit = _DISCOVERED[key] = _discover_cal_product(
+            family, detector, coord=coord, cal_token=cal_token, data_release=data_release
+        )
+    return hit
+
+
+def _discover_cal_product(
     family: CalFamily,
     detector: int,
     *,
