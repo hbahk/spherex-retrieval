@@ -41,7 +41,7 @@ from astropy.io import fits
 
 from .io import open_fits
 
-PsfSource = Literal["cal", "l2", "epsf-cal"]
+PsfSource = Literal["epsf-cal", "cal", "l2"]
 PsfKind = Literal["optical", "effective"]
 PSF_VERIFY_EVERY_DEFAULT = 200
 
