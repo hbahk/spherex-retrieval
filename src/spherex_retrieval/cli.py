@@ -56,12 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="widen the retained PSF-zone rectangle by N zones on "
                              "every side so downstream photometry can interpolate "
                              "between zones; 0 reproduces pre-2026-07-28 bundles")
-    p.add_argument("--psf-source", choices=["cal", "l2", "epsf-cal"], default="cal",
-                   help="cal: take the PSF product from the per-detector cal file of the "
-                        "image's release (QR2 average_psf cube / R7 epsf table) and stop "
-                        "each cutout download before the PSF data (~90%% fewer bytes); "
-                        "l2: download it with every cutout; epsf-cal: attach the R7 ePSF "
-                        "library (--epsf-release) to every image, QR2 included")
+    p.add_argument("--psf-source", choices=["epsf-cal", "cal", "l2"], default="epsf-cal",
+                   help="epsf-cal (default): every image gets the R7 effective PSF -- R7 "
+                        "images share their own verified epsf library, QR2 images get the "
+                        "--epsf-release library attached instead of their optical cube; "
+                        "cal: the product of the image's own release (the QR2 cube for QR2 "
+                        "images, the paper's configuration), shared per detector with the "
+                        "cutout download stopped before the PSF data; l2: download it with "
+                        "every cutout")
     p.add_argument("--epsf-release", default="qr3",
                    help="release whose ePSF library --psf-source epsf-cal attaches")
     p.add_argument("--psf-verify-every", type=int, default=200,

@@ -15,7 +15,7 @@ from .cutout import CutoutBackend, fetch_cutout
 from .psf import (ZONE_MARGIN_DEFAULT, fix_psf_header_if_needed,
                   subset_zones_for_cutout, zone_table_from_epsf)
 from .psf_shared import (EPSF_RELEASE_DEFAULT, PSF_VERIFY_EVERY_DEFAULT, PsfSource,
-                         SharedPsfRegistry, get_registry)
+                         SharedPsfRegistry, get_registry, psf_kind_of_release)
 from .query import (SUPPORTED_COLLECTIONS, find_overlapping, release_of_collection,
                     release_of_url)
 from .sapm import crop_sapm, find_sapm_product
@@ -45,7 +45,7 @@ def retrieve(
     sapm_cal_token: str | None = None,
     subset_psf: bool = True,
     zone_margin: int = ZONE_MARGIN_DEFAULT,
-    psf_source: PsfSource = "cal",
+    psf_source: PsfSource = "epsf-cal",
     psf_verify_every: int = PSF_VERIFY_EVERY_DEFAULT,
     psf_cal_token: str | None = None,
     epsf_release: str = EPSF_RELEASE_DEFAULT,
@@ -70,23 +70,29 @@ def retrieve(
         Pin the SAPM cal version, e.g. ``'cal-sapm-v2-2025-164'``.  When
         omitted, the latest SAPM available via SIA2 for each detector is
         used.
-    psf_source : {"cal", "l2", "epsf-cal"}
-        ``"cal"`` (default) takes the PSF product from the per-detector cal
-        file of the image's own release, fetched once, and stops each cutout
+    psf_source : {"epsf-cal", "cal", "l2"}
+        ``"epsf-cal"`` (default) gives every image the R7 effective PSF: an
+        R7 image (QR3, DR1) shares its own per-detector ``epsf`` library,
+        verified against the L2 file exactly as ``"cal"`` does; a QR2 image
+        gets the R7 library of ``epsf_release`` attached in place of its
+        optical cube, which is never downloaded.  Measured on A2537 QR2
+        images, the R7 ePSF fits stars better than the QR2 cube even after
+        the core re-registration (chi2/dof 1.6 vs 2.9, central residual
+        1 % vs 4 %) and needs no re-registration at all; no check against
+        the L2 file is possible for that attachment.  ``"cal"`` takes the
+        PSF product of the image's OWN release from its per-detector cal
+        file (the QR2 121-plane optical cube, ``average_psf``, or the R7
+        ``EPSF`` table, ``epsf``), fetched once, and stops each cutout
         download right after the PSF header — the product is identical in
-        every L2 file of a detector and most of a small cutout's bytes (the
-        QR2 121-plane optical cube, ``average_psf``, 4.9 MB; the R7 ``EPSF``
-        table, ``epsf``, 3.9 MB).  The PSF *header* (zone table, provenance)
-        still comes from the L2 file.  ``"l2"`` downloads the product with
-        every cutout, as before.  ``"epsf-cal"`` attaches the R7 effective
-        PSF library of ``epsf_release`` to EVERY image, QR2 ones included
-        (the diagnostic that separates a PSF-product error from a WCS
-        offset, and a way to use the ePSF on QR2 images before DR1); no
-        check against the L2 file is possible then.  The output primary
-        header records the choice in ``PSFSRC`` and the product kind in
-        ``PSFKIND``.
+        every L2 file of a detector and most of a small cutout's bytes; the
+        PSF *header* (zone table, provenance) still comes from the L2 file.
+        This is the mode that reproduces the paper's QR2 configuration of
+        record.  ``"l2"`` downloads the product with every cutout.  The
+        output primary header records the choice in ``PSFSRC`` and the
+        product kind in ``PSFKIND``.
     psf_verify_every : int
-        With ``psf_source="cal"``, the first cutout of each detector and
+        Whenever the shared product is the image's own (``"cal"``, and
+        ``"epsf-cal"`` on R7 images), the first cutout of each detector and
         every N-th one after it is downloaded in full and its product
         compared with the cal file; a mismatch switches that detector back
         to full downloads with a warning.  ``0`` checks the first cutout
@@ -96,8 +102,8 @@ def retrieve(
         Pin the PSF cal version, e.g. ``'cal-psf-v5-2026-082'`` or
         ``'cal-epsf-v1-2026-191'`` (applies to every release retrieved).
     epsf_release : str
-        Release whose ``epsf`` library ``psf_source="epsf-cal"`` attaches
-        (default ``"qr3"``).
+        Release whose ``epsf`` library ``psf_source="epsf-cal"`` attaches to
+        images of a release without one (default ``"qr3"``).
     remote_timeout : float
         Sets ``astropy.utils.data.conf.remote_timeout``; SPHEREx reads
         often exceed the default, hence 120 s is the recommended floor
@@ -127,7 +133,8 @@ def retrieve(
         """The shared-PSF registry for an image of ``release`` (None: l2)."""
         if psf_source == "l2":
             return None
-        if psf_source == "epsf-cal":
+        if psf_source == "epsf-cal" and psf_kind_of_release(release) == "optical":
+            # a QR2 image: attach the R7 library (no check against the file possible)
             return get_registry(
                 verify_every=psf_verify_every, cal_token=psf_cal_token,
                 data_release=epsf_release, kind="effective", verify=False,
