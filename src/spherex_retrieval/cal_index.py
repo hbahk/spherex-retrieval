@@ -22,13 +22,24 @@ import requests
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-CalFamily = Literal["spectral_wcs", "solid_angle_pixel_map", "average_psf"]
+CalFamily = Literal["spectral_wcs", "solid_angle_pixel_map", "average_psf", "epsf",
+                    "l3_flux_corrections"]
 
-_FAMILY_PREFIX = {
-    "spectral_wcs": "cal-wcs",
-    "solid_angle_pixel_map": "cal-sapm",
-    "average_psf": "cal-psf",
+#: Token prefixes per family; a family may have been renamed between releases
+#: (the spectral WCS is ``cal-wcs-v4-...`` under ``qr2`` and ``cal-swcs-v5-...``
+#: under ``qr3``), so each entry lists every prefix seen.
+_FAMILY_PREFIXES: dict[str, tuple[str, ...]] = {
+    "spectral_wcs": ("cal-wcs", "cal-swcs"),
+    "solid_angle_pixel_map": ("cal-sapm",),
+    "average_psf": ("cal-psf",),
+    "epsf": ("cal-epsf",),                     # R7 effective PSF library (qr3+)
+    "l3_flux_corrections": ("cal-flxc",),      # QR2 -> R7 per-pixel gain factors
 }
+
+
+def _token_pattern(family: CalFamily) -> re.Pattern[str]:
+    alts = "|".join(re.escape(p) for p in _FAMILY_PREFIXES[family])
+    return re.compile(rf"((?:{alts})-v\d+-\d{{4}}-\d{{3}})")
 
 
 def cal_filename(family: CalFamily, detector: int, token: str) -> str:
@@ -104,8 +115,7 @@ def find_via_sia(
 
 
 def _token_from_filename(family: CalFamily, fname: str) -> str | None:
-    prefix = _FAMILY_PREFIX[family]
-    m = re.search(rf"({re.escape(prefix)}-v\d+-\d{{4}}-\d{{3}})", fname)
+    m = _token_pattern(family).search(fname)
     return m.group(1) if m else None
 
 
@@ -113,33 +123,18 @@ def _token_from_filename(family: CalFamily, fname: str) -> str | None:
 # Strategy 2: HTML directory listing on irsa.ipac.caltech.edu/ibe
 # --------------------------------------------------------------------------- #
 
-@lru_cache(maxsize=8)
-def latest_cal_token_via_listing(
-    family: CalFamily,
-    *,
-    data_release: str = "qr2",
-    timeout: float = 60.0,
-) -> str | None:
-    """Hit the IRSA ``ibe`` listing API and return the latest cal token.
-
-    The endpoint ``/ibe/dir/list/<path>`` returns NDJSON
-    (``{"name": "...", "last_modified": "...", "size": "..."}`` per line)
-    where each entry is a child of ``<path>``.  We pull the names matching
-    the cal-product token pattern and pick the lex-largest.
-    """
-    listing_url = (
-        f"https://irsa.ipac.caltech.edu/ibe/dir/list/spherex/{data_release}/{family}"
-    )
-    prefix = _FAMILY_PREFIX[family]
+def _list_names(path: str, *, timeout: float = 60.0) -> list[str] | None:
+    """Child names of an IRSA ``ibe`` directory (NDJSON listing), or ``None``
+    when the listing is unreachable."""
+    listing_url = f"https://irsa.ipac.caltech.edu/ibe/dir/list/spherex/{path}"
     try:
         resp = requests.get(listing_url, timeout=timeout)
     except requests.RequestException:
         return None
-    if resp.status_code != 200 or not resp.text.strip():
+    if resp.status_code != 200:
         return None
     import json as _json
-    pattern = re.compile(rf"^{re.escape(prefix)}-v\d+-\d{{4}}-\d{{3}}$")
-    tokens: list[str] = []
+    names: list[str] = []
     for line in resp.text.splitlines():
         line = line.strip()
         if not line:
@@ -149,11 +144,46 @@ def latest_cal_token_via_listing(
         except _json.JSONDecodeError:
             continue
         name = entry.get("name", "")
-        if pattern.match(name):
-            tokens.append(name)
+        if name:
+            names.append(name)
+    return names
+
+
+@lru_cache(maxsize=32)
+def latest_cal_token_via_listing(
+    family: CalFamily,
+    *,
+    data_release: str = "qr2",
+    timeout: float = 60.0,
+    detector: int | None = None,
+) -> str | None:
+    """Hit the IRSA ``ibe`` listing API and return the latest cal token.
+
+    The endpoint ``/ibe/dir/list/<path>`` returns NDJSON
+    (``{"name": "...", "last_modified": "...", "size": "..."}`` per line)
+    where each entry is a child of ``<path>``.  We pull the names matching
+    the cal-product token pattern and pick the lex-largest.
+
+    With ``detector`` given, only tokens whose directory holds that
+    detector count: a version may be re-issued for one detector only (the
+    ``qr3`` ``epsf`` family has ``cal-epsf-v2-2026-191`` for D3 alone, the
+    finer 11x41 lattice, while D1, D2, D4-6 stay on ``v1``), and the
+    lex-largest token overall would then be a 404 for the others.
+    """
+    names = _list_names(f"{data_release}/{family}", timeout=timeout)
+    if not names:
+        return None
+    pattern = _token_pattern(family)
+    tokens = sorted({n for n in names if pattern.fullmatch(n)})
     if not tokens:
         return None
-    return sorted(set(tokens))[-1]
+    if detector is None:
+        return tokens[-1]
+    for token in reversed(tokens):
+        children = _list_names(f"{data_release}/{family}/{token}", timeout=timeout)
+        if children is not None and str(int(detector)) in children:
+            return token
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -216,7 +246,8 @@ def _discover_cal_product(
     if sia is not None:
         return sia
 
-    token = latest_cal_token_via_listing(family, data_release=data_release)
+    token = latest_cal_token_via_listing(family, data_release=data_release,
+                                         detector=detector)
     if token is None:
         raise RuntimeError(
             f"could not discover {family} cal product for D{detector} "

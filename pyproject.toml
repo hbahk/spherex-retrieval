@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spherex-retrieval"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Cutout retrieval for SPHEREx Spectral Image MEFs with side data needed for forced photometry."
 readme = "README.md"
 requires-python = ">=3.10"
