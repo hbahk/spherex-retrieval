@@ -13,10 +13,11 @@ from astropy.table import Row
 from .bundle import Bundle, RetrievalStatus, cutout_filename, write_bundle, write_summary
 from .cutout import CutoutBackend, fetch_cutout
 from .psf import (ZONE_MARGIN_DEFAULT, fix_psf_header_if_needed,
-                  subset_zones_for_cutout)
-from .psf_shared import (PSF_VERIFY_EVERY_DEFAULT, PsfSource, SharedPsfRegistry,
-                         get_registry)
-from .query import SUPPORTED_COLLECTIONS, find_overlapping
+                  subset_zones_for_cutout, zone_table_from_epsf)
+from .psf_shared import (EPSF_RELEASE_DEFAULT, PSF_VERIFY_EVERY_DEFAULT, PsfSource,
+                         SharedPsfRegistry, get_registry, psf_kind_of_release)
+from .query import (SUPPORTED_COLLECTIONS, find_overlapping, release_of_collection,
+                    release_of_url)
 from .sapm import crop_sapm, find_sapm_product
 from .wavelength import crop_wavelength_maps, find_cal_product
 
@@ -44,9 +45,10 @@ def retrieve(
     sapm_cal_token: str | None = None,
     subset_psf: bool = True,
     zone_margin: int = ZONE_MARGIN_DEFAULT,
-    psf_source: PsfSource = "cal",
+    psf_source: PsfSource = "epsf-cal",
     psf_verify_every: int = PSF_VERIFY_EVERY_DEFAULT,
     psf_cal_token: str | None = None,
+    epsf_release: str = EPSF_RELEASE_DEFAULT,
     max_workers: int = 8,
     cache_dir: Path | str | None = None,
     fsspec_kwargs: dict | None = None,
@@ -68,21 +70,40 @@ def retrieve(
         Pin the SAPM cal version, e.g. ``'cal-sapm-v2-2025-164'``.  When
         omitted, the latest SAPM available via SIA2 for each detector is
         used.
-    psf_source : {"cal", "l2"}
-        ``"cal"`` (default) takes the 121-plane PSF cube from the
-        per-detector ``average_psf`` cal product, fetched once, and stops
-        each cutout download right after the PSF header — the cube is
-        identical in every L2 file of a detector and is ~97 % of a small
-        cutout's bytes.  The PSF *header* (zone table) still comes from the
-        L2 file.  ``"l2"`` downloads the cube with every cutout, as before.
-        The output primary header records the choice in ``PSFSRC``.
+    psf_source : {"epsf-cal", "cal", "l2"}
+        ``"epsf-cal"`` (default) gives every image the R7 effective PSF: an
+        R7 image (QR3, DR1) shares its own per-detector ``epsf`` library,
+        verified against the L2 file exactly as ``"cal"`` does; a QR2 image
+        gets the R7 library of ``epsf_release`` attached in place of its
+        optical cube, which is never downloaded.  Measured on A2537 QR2
+        images, the R7 ePSF fits stars better than the QR2 cube even after
+        the core re-registration (chi2/dof 1.6 vs 2.9, central residual
+        1 % vs 4 %) and needs no re-registration at all; no check against
+        the L2 file is possible for that attachment.  ``"cal"`` takes the
+        PSF product of the image's OWN release from its per-detector cal
+        file (the QR2 121-plane optical cube, ``average_psf``, or the R7
+        ``EPSF`` table, ``epsf``), fetched once, and stops each cutout
+        download right after the PSF header — the product is identical in
+        every L2 file of a detector and most of a small cutout's bytes; the
+        PSF *header* (zone table, provenance) still comes from the L2 file.
+        This is the mode that reproduces the paper's QR2 configuration of
+        record.  ``"l2"`` downloads the product with every cutout.  The
+        output primary header records the choice in ``PSFSRC`` and the
+        product kind in ``PSFKIND``.
     psf_verify_every : int
-        With ``psf_source="cal"``, the first cutout of each detector and
-        every N-th one after it is downloaded in full and its cube compared
-        with the cal product; a mismatch switches that detector back to full
-        downloads with a warning.  ``0`` checks the first cutout only.
+        Whenever the shared product is the image's own (``"cal"``, and
+        ``"epsf-cal"`` on R7 images), the first cutout of each detector and
+        every N-th one after it is downloaded in full and its product
+        compared with the cal file; a mismatch switches that detector back
+        to full downloads with a warning.  ``0`` checks the first cutout
+        only.  R7 cutouts are additionally checked on every download by the
+        ``EPSF`` header's calibration source file.
     psf_cal_token : str, optional
-        Pin the PSF cal version, e.g. ``'cal-psf-v5-2026-082'``.
+        Pin the PSF cal version, e.g. ``'cal-psf-v5-2026-082'`` or
+        ``'cal-epsf-v1-2026-191'`` (applies to every release retrieved).
+    epsf_release : str
+        Release whose ``epsf`` library ``psf_source="epsf-cal"`` attaches to
+        images of a release without one (default ``"qr3"``).
     remote_timeout : float
         Sets ``astropy.utils.data.conf.remote_timeout``; SPHEREx reads
         often exceed the default, hence 120 s is the recommended floor
@@ -105,16 +126,25 @@ def retrieve(
 
     cache_dir = Path(cache_dir) if cache_dir else None
 
-    if psf_source not in ("cal", "l2"):
+    if psf_source not in ("cal", "l2", "epsf-cal"):
         raise ValueError(f"unknown psf_source: {psf_source!r}")
-    psf_registry = None
-    if psf_source == "cal":
-        psf_registry = get_registry(
-            verify_every=psf_verify_every,
-            cal_token=psf_cal_token,
-            cache_dir=cache_dir,
-            use_s3=(cutout_backend == "fsspec"),
-            fsspec_kwargs=fsspec_kwargs,
+
+    def _registry_for(release: str) -> SharedPsfRegistry | None:
+        """The shared-PSF registry for an image of ``release`` (None: l2)."""
+        if psf_source == "l2":
+            return None
+        if psf_source == "epsf-cal" and psf_kind_of_release(release) == "optical":
+            # a QR2 image: attach the R7 library (no check against the file possible)
+            return get_registry(
+                verify_every=psf_verify_every, cal_token=psf_cal_token,
+                data_release=epsf_release, kind="effective", verify=False,
+                cache_dir=cache_dir, use_s3=(cutout_backend == "fsspec"),
+                fsspec_kwargs=fsspec_kwargs,
+            )
+        return get_registry(
+            verify_every=psf_verify_every, cal_token=psf_cal_token,
+            data_release=release, cache_dir=cache_dir,
+            use_s3=(cutout_backend == "fsspec"), fsspec_kwargs=fsspec_kwargs,
         )
 
     overlap = find_overlapping(
@@ -129,6 +159,7 @@ def retrieve(
         return [], output_dir
 
     def _do_one(row: Row) -> Bundle:
+        release = _release_of_row(row)
         return _retrieve_one(
             row=row,
             coord=coord,
@@ -139,7 +170,8 @@ def retrieve(
             sapm_cal_token=sapm_cal_token,
             subset_psf=subset_psf,
             zone_margin=zone_margin,
-            psf_registry=psf_registry,
+            psf_registry=_registry_for(release),
+            data_release=release,
             cache_dir=cache_dir,
             fsspec_kwargs=fsspec_kwargs,
             query_backend=query_backend,
@@ -165,6 +197,14 @@ def retrieve(
     return bundles, output_dir
 
 
+def _release_of_row(row) -> str:
+    """Data release of a discovery row: from its collection name, else its URL."""
+    try:
+        return release_of_collection(str(row["collection"]))
+    except (ValueError, KeyError):
+        return release_of_url(str(row["access_url"])) or "qr2"
+
+
 def _retrieve_one(
     *,
     row: Row,
@@ -177,6 +217,7 @@ def _retrieve_one(
     subset_psf: bool,
     zone_margin: int = ZONE_MARGIN_DEFAULT,
     psf_registry: SharedPsfRegistry | None = None,
+    data_release: str = "qr2",
     cache_dir: Path | None,
     fsspec_kwargs: dict | None,
     query_backend: QueryBackend,
@@ -209,10 +250,11 @@ def _retrieve_one(
         bundle.message = f"cutout failed: {exc}"
         return bundle
 
-    if bundle.cutout is not None:
+    if bundle.cutout is not None and bundle.cutout.psf_kind == "optical":
         # Apply the SPHEREx PSF header erratum fix in-place if the file
         # is from VERSION <= 6.5.5 without "+psffix1".  Without this the
         # XCTR_i / YCTR_i mapping is wrong and zone selection is wrong.
+        # (R7 files carry the lattice in the EPSF table; nothing to fix.)
         try:
             fixed_hdr, was_fixed = fix_psf_header_if_needed(
                 bundle.cutout.psf_header,
@@ -227,12 +269,15 @@ def _retrieve_one(
 
     if subset_psf and bundle.cutout is not None:
         try:
+            zone_table = (zone_table_from_epsf(bundle.cutout.psf_table)
+                          if bundle.cutout.psf_table is not None else None)
             bundle.psf_subset = subset_zones_for_cutout(
                 bundle.cutout.psf_cube,
                 bundle.cutout.psf_header,
                 cutout_shape=bundle.cutout.image.shape,
                 pixel_origin=bundle.cutout.pixel_origin,
                 zone_margin=zone_margin,
+                zone_table=zone_table,
             )
         except Exception as exc:
             bundle.message = f"psf subset failed: {exc}"
@@ -240,7 +285,8 @@ def _retrieve_one(
     if include_wavelength and bundle.cutout is not None:
         try:
             cal_http, cal_s3 = find_cal_product(
-                bundle.detector, backend=query_backend, coord=coord
+                bundle.detector, backend=query_backend, coord=coord,
+                data_release=data_release,
             )
             cal_target = cal_s3 if (cutout_backend == "fsspec" and cal_s3) else cal_http
             bundle.wavelength = crop_wavelength_maps(
@@ -261,6 +307,7 @@ def _retrieve_one(
                 backend=query_backend,
                 cal_token=sapm_cal_token,
                 coord=coord,
+                data_release=data_release,
             )
             sapm_target = (
                 sapm_s3 if (cutout_backend == "fsspec" and sapm_s3) else sapm_http

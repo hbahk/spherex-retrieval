@@ -10,6 +10,7 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 from .core import retrieve
+from .query import SUPPORTED_COLLECTIONS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,8 +31,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--collection",
         action="append",
-        choices=["spherex_qr2", "spherex_qr2_deep"],
-        help="May be passed multiple times.  Defaults to both wide+deep.",
+        choices=list(SUPPORTED_COLLECTIONS),
+        help="May be passed multiple times.  Defaults to every quick release, "
+             "wide and deep (QR2: optical PSF cube; QR3: R7 effective PSF).",
     )
     p.add_argument(
         "--bandpass",
@@ -54,16 +56,22 @@ def build_parser() -> argparse.ArgumentParser:
                         help="widen the retained PSF-zone rectangle by N zones on "
                              "every side so downstream photometry can interpolate "
                              "between zones; 0 reproduces pre-2026-07-28 bundles")
-    p.add_argument("--psf-source", choices=["cal", "l2"], default="cal",
-                   help="cal: take the PSF cube from the per-detector average_psf cal "
-                        "product and stop each cutout download before the PSF data "
-                        "(~97%% fewer bytes); l2: download the cube with every cutout")
+    p.add_argument("--psf-source", choices=["epsf-cal", "cal", "l2"], default="epsf-cal",
+                   help="epsf-cal (default): every image gets the R7 effective PSF -- R7 "
+                        "images share their own verified epsf library, QR2 images get the "
+                        "--epsf-release library attached instead of their optical cube; "
+                        "cal: the product of the image's own release (the QR2 cube for QR2 "
+                        "images, the paper's configuration), shared per detector with the "
+                        "cutout download stopped before the PSF data; l2: download it with "
+                        "every cutout")
+    p.add_argument("--epsf-release", default="qr3",
+                   help="release whose ePSF library --psf-source epsf-cal attaches")
     p.add_argument("--psf-verify-every", type=int, default=200,
                    help="with --psf-source cal, download every N-th cutout per detector "
                         "in full and compare its PSF cube with the cal product "
                         "(0 = first cutout only)")
     p.add_argument("--psf-cal-token", default=None,
-                   help="Pin PSF cal version (e.g. cal-psf-v5-2026-082).")
+                   help="Pin PSF cal version (e.g. cal-psf-v5-2026-082 or cal-epsf-v1-2026-191).")
     p.add_argument("--max-workers", type=int, default=8)
     p.add_argument("--cache-dir", type=Path, default=None)
     return p
@@ -75,9 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     coord = SkyCoord(ra=args.ra * u.deg, dec=args.dec * u.deg, frame="icrs")
     size = args.size * u.arcsec
 
-    collections = tuple(args.collection) if args.collection else (
-        "spherex_qr2", "spherex_qr2_deep",
-    )
+    collections = tuple(args.collection) if args.collection else SUPPORTED_COLLECTIONS
 
     bundles, out_dir = retrieve(
         coord,
@@ -95,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         psf_source=args.psf_source,
         psf_verify_every=args.psf_verify_every,
         psf_cal_token=args.psf_cal_token,
+        epsf_release=args.epsf_release,
         max_workers=args.max_workers,
         cache_dir=args.cache_dir,
     )
