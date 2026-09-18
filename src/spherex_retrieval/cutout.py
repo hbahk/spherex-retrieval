@@ -48,15 +48,18 @@ class CutoutPayload:
     flags: np.ndarray
     variance: np.ndarray
     zodi: np.ndarray
-    psf_cube: np.ndarray              # full 121-plane cube (read-only when shared from the cal product)
+    psf_cube: np.ndarray              # (n_zones, S, S): the QR2 121-plane optical cube, or the
+                                      # R7 ePSF arrays (n_zones, 33, 33); read-only when shared
     psf_header: fits.Header
     image_header: fits.Header         # used for spatial + spectral WCS
     primary_header: fits.Header       # carries VERSION, OBSID, etc. — needed for the PSF erratum check
     spatial_wcs: WCS
     detector: int
     pixel_origin: tuple[int, int]     # (xlo, ylo) of the cutout in original detector pixels (0-based)
-    psf_oversamp: int = 10            # OVERSAMP keyword from the PSF header (default per QR-2)
-    psf_source: str = "l2"            # "l2", or "cal:<average_psf file>" when the cube was shared
+    psf_oversamp: int = 10            # OVERSAMP (QR2) / OVSMPX (R7) from the PSF header
+    psf_source: str = "l2"            # "l2", "cal:<average_psf file>" or "epsf:<epsf file>" when shared
+    psf_kind: str = "optical"         # "optical" (QR2 cube) or "effective" (R7 EPSF table)
+    psf_table: np.ndarray | None = None   # the R7 EPSF bintable rows (zone metadata), else None
 
 
 # --------------------------------------------------------------------------- #
@@ -99,11 +102,17 @@ def fetch_irsa_cutout(
     payload, source = psf_registry.fetch(
         detector,
         fetch_full=_full,
-        fetch_light=lambda cube: _fetch_irsa_cutout_without_psf(cutout_url, cube),
+        fetch_light=lambda product: _fetch_irsa_cutout_without_psf(cutout_url, product),
         cube_of=lambda p: p.psf_cube,
+        provenance_of=_psf_provenance,
     )
     payload.psf_source = source
     return payload
+
+
+def _psf_provenance(payload: CutoutPayload) -> str | None:
+    from .psf_shared import epsf_source_file
+    return epsf_source_file(payload.psf_header)
 
 
 def _detector_from_url(access_url: str) -> int | None:
@@ -113,8 +122,12 @@ def _detector_from_url(access_url: str) -> int | None:
     return parsed["det"] if parsed else None
 
 
-def _fetch_irsa_cutout_without_psf(cutout_url: str, psf_cube: np.ndarray) -> CutoutPayload:
-    """Download up to the end of the PSF header, then hang up."""
+def _fetch_irsa_cutout_without_psf(cutout_url: str, psf_product) -> CutoutPayload:
+    """Download up to the end of the PSF header, then hang up.
+
+    ``psf_product`` is the shared per-detector product: the QR2 optical cube
+    (an array) or an R7 :class:`~spherex_retrieval.psf_shared.EpsfLibrary`.
+    """
     scanner = _PsfHeaderScanner()
     body, stopped = http_fetch_until(cutout_url, scanner)
     if not stopped:
@@ -124,11 +137,13 @@ def _fetch_irsa_cutout_without_psf(cutout_url: str, psf_cube: np.ndarray) -> Cut
     psf_start, psf_end = scanner.psf_span
     psf_header = fits.Header.fromstring(body[psf_start:psf_end].decode("ascii"))
     with fits.open(io.BytesIO(body[:psf_start])) as hdul:
-        return _payload_from_irsa_hdul(hdul, psf_cube=psf_cube, psf_header=psf_header)
+        return _payload_from_irsa_hdul(hdul, psf_product=psf_product, psf_header=psf_header)
 
 
 _FITS_BLOCK = 2880
 _END_CARD = b"END" + b" " * 77
+#: PSF extension names: ``PSF`` (QR2 optical cube), ``EPSF`` (R7 effective table).
+PSF_EXTNAMES = ("PSF", "EPSF")
 
 
 class _PsfHeaderScanner:
@@ -140,10 +155,11 @@ class _PsfHeaderScanner:
     ``(start, end)``.
     """
 
-    def __init__(self, extname: str = "PSF", fallback_index: int = 5):
-        self.extname = extname
+    def __init__(self, extname: str | tuple[str, ...] = PSF_EXTNAMES, fallback_index: int = 5):
+        self.extnames = (extname,) if isinstance(extname, str) else tuple(extname)
         self.fallback_index = fallback_index
         self.psf_span: tuple[int, int] | None = None
+        self.extname: str | None = None   # the name actually found
         self._hdu_start = 0      # offset of the header being read
         self._block = 0          # next header block to look for END in
         self._index = 0
@@ -155,8 +171,9 @@ class _PsfHeaderScanner:
                 return None
             header = fits.Header.fromstring(bytes(buf[self._hdu_start:end]).decode("ascii"))
             name = str(header.get("EXTNAME", "")).strip().upper()
-            if name == self.extname or (not name and self._index == self.fallback_index):
+            if name in self.extnames or (not name and self._index == self.fallback_index):
                 self.psf_span = (self._hdu_start, end)
+                self.extname = name or self.extnames[0]
                 return end
             self._hdu_start = self._block = end + _padded_data_size(header)
             self._index += 1
@@ -182,23 +199,63 @@ def _padded_data_size(header: fits.Header) -> int:
     return -(-nbytes // _FITS_BLOCK) * _FITS_BLOCK
 
 
+def _psf_fields_from_hdu(psf_hdu) -> dict:
+    """PSF payload fields from a ``PSF`` (QR2 image cube) or ``EPSF`` (R7
+    bintable) HDU."""
+    from .psf_shared import epsf_library_from_hdu
+
+    name = str(psf_hdu.header.get("EXTNAME", "")).strip().upper()
+    if name == "EPSF" or psf_hdu.header.get("XTENSION") == "BINTABLE":
+        lib = epsf_library_from_hdu(psf_hdu)
+        return _psf_fields_from_product(lib, psf_hdu.header.copy())
+    return dict(psf_cube=np.array(psf_hdu.data, copy=True), psf_header=psf_hdu.header.copy(),
+                psf_kind="optical", psf_table=None,
+                psf_oversamp=int(psf_hdu.header.get("OVERSAMP", 10)))
+
+
+def _psf_fields_from_product(product, psf_header: fits.Header) -> dict:
+    """PSF payload fields from a shared product (cube or EpsfLibrary) and the
+    L2 PSF header that came with the cutout."""
+    from .psf_shared import EpsfLibrary
+
+    if isinstance(product, EpsfLibrary):
+        from .psf_shared import epsf_source_file
+        if epsf_source_file(psf_header) is None:
+            # the L2 file did not carry this product (psf_source="epsf-cal"):
+            # the library's own header is the PSF header of record
+            psf_header = product.header.copy()
+        ox, oy = psf_header.get("OVSMPX", product.header.get("OVSMPX", 5)), \
+            psf_header.get("OVSMPY", product.header.get("OVSMPY", 5))
+        if int(ox) != int(oy):
+            raise ValueError(f"anisotropic ePSF oversampling {ox}x{oy} is not supported")
+        return dict(psf_cube=product.cube, psf_header=psf_header, psf_kind="effective",
+                    psf_table=product.table, psf_oversamp=int(ox))
+    return dict(psf_cube=product, psf_header=psf_header, psf_kind="optical", psf_table=None,
+                psf_oversamp=int(psf_header.get("OVERSAMP", 10)))
+
+
 def _payload_from_irsa_hdul(
     hdul: fits.HDUList,
     *,
     psf_cube: np.ndarray | None = None,
+    psf_product=None,
     psf_header: fits.Header | None = None,
 ) -> CutoutPayload:
-    """Build the payload; ``psf_cube``/``psf_header`` stand in for a PSF HDU
-    that was deliberately not downloaded."""
+    """Build the payload; ``psf_product`` (or the older ``psf_cube``) and
+    ``psf_header`` stand in for a PSF HDU that was deliberately not
+    downloaded."""
     primary = hdul[0].header.copy()
     image_hdu = hdul["IMAGE"] if "IMAGE" in hdul else hdul[1]
     flags_hdu = hdul["FLAGS"] if "FLAGS" in hdul else hdul[2]
     var_hdu = hdul["VARIANCE"] if "VARIANCE" in hdul else hdul[3]
     zodi_hdu = hdul["ZODI"] if "ZODI" in hdul else hdul[4]
-    if psf_cube is None:
-        psf_hdu = hdul["PSF"] if "PSF" in hdul else hdul[5]
-        psf_cube = np.array(psf_hdu.data, copy=True)
-        psf_header = psf_hdu.header.copy()
+    if psf_product is None:
+        psf_product = psf_cube
+    if psf_product is None:
+        psf_hdu = _find_psf_hdu(hdul)
+        psf_fields = _psf_fields_from_hdu(psf_hdu)
+    else:
+        psf_fields = _psf_fields_from_product(psf_product, psf_header)
 
     header = image_hdu.header
     crpix1a = int(round(header.get("CRPIX1A", 1)))
@@ -220,15 +277,20 @@ def _payload_from_irsa_hdul(
         flags=np.array(flags_hdu.data, copy=True),
         variance=np.array(var_hdu.data, copy=True),
         zodi=np.array(zodi_hdu.data, copy=True),
-        psf_cube=psf_cube,
-        psf_header=psf_header,
         image_header=header.copy(),
         primary_header=primary,
         spatial_wcs=WCS(header).celestial,
         detector=int(header.get("DETECTOR", -1)),
         pixel_origin=pixel_origin,
-        psf_oversamp=int(psf_header.get("OVERSAMP", 10)),
+        **psf_fields,
     )
+
+
+def _find_psf_hdu(hdul: fits.HDUList):
+    for name in PSF_EXTNAMES:
+        if name in hdul:
+            return hdul[name]
+    return hdul[5]
 
 
 # --------------------------------------------------------------------------- #
@@ -253,9 +315,10 @@ def fetch_fsspec_cutout(
     payload, source = psf_registry.fetch(
         detector,
         fetch_full=lambda: _fsspec_cutout(target, coord, size, fsspec_kwargs=fsspec_kwargs),
-        fetch_light=lambda cube: _fsspec_cutout(
-            target, coord, size, fsspec_kwargs=fsspec_kwargs, psf_cube=cube),
+        fetch_light=lambda product: _fsspec_cutout(
+            target, coord, size, fsspec_kwargs=fsspec_kwargs, psf_product=product),
         cube_of=lambda p: p.psf_cube,
+        provenance_of=_psf_provenance,
     )
     payload.psf_source = source
     return payload
@@ -268,15 +331,19 @@ def _fsspec_cutout(
     *,
     fsspec_kwargs: dict | None = None,
     psf_cube: np.ndarray | None = None,
+    psf_product=None,
 ) -> CutoutPayload:
-    """``psf_cube`` given: skip the 4.9 MB PSF read and attach that cube."""
+    """``psf_product`` (or ``psf_cube``) given: skip the PSF data read and
+    attach that product."""
+    if psf_product is None:
+        psf_product = psf_cube
     with open_fits(target, mode="auto", fsspec_kwargs=fsspec_kwargs) as hdul:
         primary = hdul[0].header.copy()
         image_hdu = hdul["IMAGE"] if "IMAGE" in hdul else hdul[1]
         flags_hdu = hdul["FLAGS"] if "FLAGS" in hdul else hdul[2]
         var_hdu = hdul["VARIANCE"] if "VARIANCE" in hdul else hdul[3]
         zodi_hdu = hdul["ZODI"] if "ZODI" in hdul else hdul[4]
-        psf_hdu = hdul["PSF"] if "PSF" in hdul else hdul[5]
+        psf_hdu = _find_psf_hdu(hdul)
 
         wcs_full = WCS(image_hdu.header).celestial
         size_pix = _size_to_pixels(size, wcs_full)
@@ -288,8 +355,10 @@ def _fsspec_cutout(
         flags = np.asarray(flags_hdu.section[sl[0], sl[1]])
         var = np.asarray(var_hdu.section[sl[0], sl[1]])
         zodi = np.asarray(zodi_hdu.section[sl[0], sl[1]])
-        if psf_cube is None:
-            psf_cube = np.asarray(psf_hdu.data, copy=True)
+        if psf_product is None:
+            psf_fields = _psf_fields_from_hdu(psf_hdu)
+        else:
+            psf_fields = _psf_fields_from_product(psf_product, psf_hdu.header.copy())
 
         cropped_header = image_hdu.header.copy()
         cropped_header.update(cut_image.wcs.to_header())
@@ -305,14 +374,12 @@ def _fsspec_cutout(
             flags=flags,
             variance=var,
             zodi=zodi,
-            psf_cube=psf_cube,
-            psf_header=psf_hdu.header.copy(),
             image_header=cropped_header,
             primary_header=primary,
             spatial_wcs=cut_image.wcs,
             detector=int(image_hdu.header.get("DETECTOR", -1)),
             pixel_origin=pixel_origin,
-            psf_oversamp=int(psf_hdu.header.get("OVERSAMP", 10)),
+            **psf_fields,
         )
 
 
