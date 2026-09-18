@@ -71,13 +71,13 @@ Each per-cutout MEF:
 
 | HDU | name      | content                                                          |
 |-----|-----------|------------------------------------------------------------------|
-| 0   | PRIMARY   | provenance — `OBSID`, `DETECTOR`, `RA_REQ`, `DEC_REQ`, `STATUS`, `VERSION`, `PSFFIXED`, `OVERSAMP`, `PSFSRC` |
+| 0   | PRIMARY   | provenance — `OBSID`, `DETECTOR`, `RA_REQ`, `DEC_REQ`, `STATUS`, `VERSION`, `PSFFIXED`, `OVERSAMP`, `PSFSRC`, `PSFKIND`, `PSFNORM` (+ `EPSFCAL`, `DETCOORD`, `ZONENX`, `ZONENY` for R7) |
 | 1   | IMAGE     | calibrated surface brightness (MJy/sr), cropped                  |
 | 2   | FLAGS     | per-pixel bitmap                                                 |
 | 3   | VARIANCE  | (MJy/sr)²                                                        |
 | 4   | ZODI      | modeled zodiacal background (MJy/sr)                             |
-| 5   | PSF       | 101×101×N_zones cube, restricted to overlapping zones            |
-| 6   | PSF_ZONES | lookup: `zone_id`, `x`, `y` (orig 0-based), `plane_idx`          |
+| 5   | PSF       | N_zones×S×S PSF planes restricted to overlapping zones: 101×101 optical (QR2) or 33×33 effective (R7) |
+| 6   | PSF_ZONES | lookup: `zone_id`, `x`, `y` (orig 0-based), `plane_idx` (+ `xwidth`, `ywidth`, `nstar`, `neff` for R7) |
 | opt | CWAVE     | per-pixel central wavelength (µm) — when `include_wavelength`    |
 | opt | CBAND     | per-pixel bandwidth (µm) — when `include_wavelength`             |
 | opt | SAPM      | per-pixel solid angle (arcsec²) — when `include_sapm`            |
@@ -92,7 +92,7 @@ Each per-cutout MEF:
 | Cutout     | `cutout_backend="irsa"` (server-side cutout) | `"fsspec"` byte-range over HTTP or `s3://`     |
 | Wavelength | `include_wavelength=True` (CWAVE/CBAND) | `False` to skip                                     |
 | PSF        | `subset_psf=True` (overlapping zones only) | `False` to keep all 121 planes                   |
-| PSF cube   | `psf_source="cal"` (one `average_psf` cube per detector, cutout download stops before the PSF data) | `"l2"` to download the cube with every cutout; `psf_verify_every=N`, `psf_cal_token=...` |
+| PSF product | `psf_source="epsf-cal"` (every image gets the R7 effective PSF: R7 images share their own `epsf` library, QR2 images get the `epsf_release` library instead of their optical cube; one download per detector, cutout download stops before the PSF data) | `"cal"` for the product of the image's own release (the QR2 cube on QR2 images: the paper's configuration); `"l2"` to download it with every cutout; `psf_verify_every=N`, `psf_cal_token=...`, `epsf_release="qr3"` |
 | Bandpass   | all detectors         | `bandpass="SPHEREx-D2"` (filter applied at query time)                |
 | SAPM       | `include_sapm=False`  | `True` to fetch + crop Solid Angle Pixel Map (arcsec²)                |
 | Survey     | `("spherex_qr2", "spherex_qr2_deep")` | restrict via `collections=(...)`                      |
@@ -172,7 +172,43 @@ The Explanatory Supplement explicitly flags the L2 `WCS-WAVE` lookup table as **
 via SIA2 (`COLLECTION=spherex_qr2_cal`) and cropped to the same pixel box as the science cutout
 using `.section[ylo:..., xlo:...]`, so cloud reads only fetch the relevant pixel slab.
 
-### Shared PSF cube (`psf_source="cal"`)
+### Two PSF kinds: QR2 optical cube and R7 effective PSF (`PSFKIND`)
+
+QR2 files (pipeline 6.x) carry an *optical* PSF: 121 planes on an 11×11 zone lattice, 10×
+oversampled, with the detector pixel response deconvolved. Forward models must integrate it
+over each native pixel. QR3 and DR1 files (pipeline R7) carry the *effective* PSF instead
+(Anderson & King 2000): the `EPSF` binary table, one 33×33 array at 5× per zone of a 21×21
+lattice (11×41 on D3), with the pixel response *included*. Forward models must sample it at
+the pixel centres (×25 for the fraction per native pixel) and never integrate it again
+(doing so widens the PSF by 1/12 px² of variance, ~30 % in N_eff on SPHEREx).
+
+The bundle layout is the same for both. The PRIMARY header says which kind it holds
+(`PSFKIND = 'OPTICAL' | 'EPSF'`, `OVERSAMP = 10 | 5`, `PSFNORM = 'hr-sum-1'`: each plane sums
+to 1 on its own oversampled grid), and for R7 adds `EPSFCAL` (the calibration source file the
+`EPSF` header names), `DETCOORD` (`'sky'`: arrays and zone centres are in the L2 image
+orientation for every detector, including the X-flipped MWIR ones — no mirroring), and the
+lattice size `ZONENX`/`ZONENY`. `PSF_ZONES` gains the zone widths, star counts and `N_eff`
+from the table. The zone lattice is read from the table, never assumed.
+
+Discovery: QR3 images are not yet in IRSA's SIA2/CAOM service (2026-09-18), so
+`spherex_qr3` / `spherex_qr3_deep` are resolved through the `spherex.plane` /
+`spherex.artifact` TAP tables (footprint `poly`, release from the artifact path); the default
+collection list now covers both releases, oldest first. Calibration products come from the
+image's own release directory (`qr3/spectral_wcs` is `cal-swcs-v5-...`, `qr3/epsf` is
+`cal-epsf-v1-...`, D3 `v2`), resolved per detector.
+
+`psf_source="epsf-cal"` (the default) gives every image the R7 effective PSF. R7 images share
+their own per-detector `epsf` library, verified against the L2 file as described below; a QR2
+image gets the R7 library of `epsf_release` (default `qr3`) attached in place of its optical
+cube, which is never downloaded, and its bundle says `PSFKIND = 'EPSF'`,
+`PSFSRC = 'epsf:<file>'`. This is the recommended product for QR2 images too: on A2537 the R7
+ePSF fits stars better than the QR2 cube even after the core re-registration (chi2/dof 1.6 vs
+2.9, central stacked residual 1 % vs 4 %), and the QR2 cube's registration offset (−0.053,
+−0.050 px) is a property of that product, not of the images (the ePSF on the same images shows
+≤ 0.016 px). No check against the L2 file is possible for the attachment. Use
+`psf_source="cal"` to get the QR2 cube on QR2 images, the paper's configuration of record.
+
+### Shared PSF product (`psf_source="cal"`)
 
 The 121×101×101 PSF cube in an L2 file is a per-detector calibration constant: it is
 byte-identical to the `PSF-DATA-CUBE` of the standalone
@@ -181,8 +217,9 @@ byte-identical to the `PSF-DATA-CUBE` of the standalone
 cutout service passes it through uncropped, so a small cutout is 4.94 MB of PSF out of ~5.1 MB,
 re-sent on every request.
 
-With `psf_source="cal"` (default) the cube is fetched once per detector from the cal product
-and each cutout download hangs up right after the PSF *header* (~0.12 MB; the service ignores
+With `psf_source="cal"` (and with the default `"epsf-cal"` on R7 images, where the product is
+the image's own) the product is fetched once per detector from the cal file and each cutout
+download hangs up right after the PSF *header* (~0.12 MB; the service ignores
 `Range`, so closing the stream is the only way). The PSF header — the zone table and its
 erratum handling — still comes from the L2 file, and the written bundles are identical to
 `psf_source="l2"` apart from the `PSFSRC` keyword (`l2` or `cal:<file>`). Partial downloads are
@@ -192,10 +229,17 @@ The two published cal versions, `cal-psf-v5-2025-206` and `cal-psf-v5-2026-082`,
 cube; the later one is a header reissue (zone-centre `XCTR_i`/`YCTR_i` X↔Y erratum fixed,
 `VERSION`/`DATE` added).
 
-No L2 keyword names the PSF cal a file was built with, so the identity is sampled rather than
-assumed: the first cutout of each detector in a process, and every `psf_verify_every`-th (200)
-after it, is downloaded in full and compared with the cal cube. A mismatch emits a
+No QR2 L2 keyword names the PSF cal a file was built with, so the identity is sampled rather
+than assumed: the first cutout of each detector in a process, and every `psf_verify_every`-th
+(200) after it, is downloaded in full and compared with the cal cube. A mismatch emits a
 `RuntimeWarning` and switches that detector back to full downloads.
+
+The same mechanism serves the R7 `EPSF` table (3.86 MB of a ~4.4 MB cutout) from the
+[`epsf`](https://irsa.ipac.caltech.edu/ibe/data/spherex/qr3/epsf) cal product; there the
+`EPSF` header of every cutout names its calibration source file, which the truncated stream
+still delivers, so every R7 cutout is also checked by that provenance string against the
+library's (after the same first full download). The IRSA cutout service answers HTTP 503 under
+four concurrent requests; two are fine.
 
 ### PSF erratum (VERSION ≤ 6.5.5)
 

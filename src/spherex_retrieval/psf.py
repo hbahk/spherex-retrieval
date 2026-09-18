@@ -1,11 +1,17 @@
 """PSF zone bookkeeping for SPHEREx cutouts.
 
-The L2 MEF stores 121 oversampled PSFs in an 11x11 detector grid.  Each
-plane is tagged in the PSF HDU header with ``XCTR_i``/``YCTR_i`` (0-based
+A QR2 L2 MEF stores 121 oversampled optical PSFs in an 11x11 detector grid,
+each plane tagged in the PSF HDU header with ``XCTR_i``/``YCTR_i`` (0-based
 detector pixel coordinates of the zone center, even though ``i`` itself is
-1-based).  This module provides:
+1-based).  An R7 (QR3/DR1) MEF stores the effective PSFs as the ``EPSF``
+binary table instead, one row per zone of a 21x21 lattice (11x41 on D3)
+with ``BINX``/``BINY``/``XCENTER``/``YCENTER``/``XWIDTH``/``YWIDTH``; the
+lattice is read from the table, never assumed.  This module provides:
 
-* :func:`build_zone_table` — turn the header into a tidy table.
+* :func:`build_zone_table` — turn the QR2 header into a tidy table;
+  :func:`zone_table_from_epsf` does the same for the R7 table.
+* :func:`zone_lattice` — 1-based (ix, iy) lattice indices of every zone,
+  inferred from the distinct centre coordinates of either table.
 * :func:`fix_psf_header_if_needed` — apply the QR-2 PSF erratum rewrite
   for spectral images with ``VERSION <= 6.5.5`` (no ``+psffix1`` local
   tag).  See https://irsa.ipac.caltech.edu/data/SPHEREx/docs/psfhdrerr.html
@@ -31,16 +37,48 @@ from packaging.version import Version
 PSF_VERSION_FIXED = Version("6.5.6")
 PSF_FIX_TAG = "psffix1"
 
+# The QR2 lattice (x-fast plane order); kept for callers that import them.
 ZONE_GRID_X, ZONE_GRID_Y = np.meshgrid(np.arange(11), np.arange(11))
 ZONE_X_INDEX = ZONE_GRID_X.flatten() + 1   # 1..11
 ZONE_Y_INDEX = ZONE_GRID_Y.flatten() + 1
 
+#: Optional per-zone metadata columns carried from the R7 table into the subset lookup.
+ZONE_EXTRA_COLUMNS = ("xwidth", "ywidth", "nstar", "neff")
+
 
 @dataclass
 class PSFZoneSubset:
-    cube: np.ndarray            # (n_zones, 101, 101)
-    lookup: Table               # zone_id, x, y, plane_idx
-    zone_grid_xy: np.ndarray    # (n_zones, 2) integer 1..11 indices
+    cube: np.ndarray            # (n_zones, S, S): 101x101 (QR2) or 33x33 (R7)
+    lookup: Table               # zone_id, x, y, plane_idx (+ xwidth, ywidth, nstar, neff for R7)
+    zone_grid_xy: np.ndarray    # (n_zones, 2) integer 1-based lattice indices
+
+
+def zone_table_from_epsf(psf_table: np.ndarray) -> Table:
+    """``zone_id`` (1-based row number), ``x``, ``y`` (0-based detector pixels)
+    and the per-zone metadata of an R7 ``EPSF`` table."""
+    n = len(psf_table)
+    cols = {
+        "zone_id": np.arange(1, n + 1, dtype=np.int32),
+        "x": np.asarray(psf_table["XCENTER"], dtype=np.float64),
+        "y": np.asarray(psf_table["YCENTER"], dtype=np.float64),
+    }
+    for col, src in (("xwidth", "XWIDTH"), ("ywidth", "YWIDTH"), ("nstar", "NSTAR"),
+                     ("neff", "NEFF_MEAN")):
+        if src in psf_table.dtype.names:
+            cols[col] = np.asarray(psf_table[src])
+    return Table(cols)
+
+
+def zone_lattice(table: Table) -> tuple[np.ndarray, np.ndarray]:
+    """1-based lattice indices ``(ix, iy)`` of every zone row, from the ranks of
+    its centre among the distinct centre coordinates (11x11 for QR2, 21x21 or
+    11x41 for R7)."""
+    x = np.asarray(table["x"], dtype=np.float64)
+    y = np.asarray(table["y"], dtype=np.float64)
+    ux, uy = np.unique(np.round(x, 3)), np.unique(np.round(y, 3))
+    ix = np.searchsorted(ux, np.round(x, 3)) + 1
+    iy = np.searchsorted(uy, np.round(y, 3)) + 1
+    return ix.astype(np.int64), iy.astype(np.int64)
 
 
 def build_zone_table(psf_header: fits.Header) -> Table:
@@ -87,21 +125,28 @@ def subset_zones_for_cutout(
     cutout_shape: tuple[int, int],     # (ny, nx)
     pixel_origin: tuple[int, int],     # (xlo, ylo) in 0-based detector pixels
     zone_margin: int = ZONE_MARGIN_DEFAULT,
+    zone_table: Table | None = None,
 ) -> PSFZoneSubset:
     """Slice the PSF cube down to zones overlapping the cutout bbox.
 
+    The zone table comes from ``zone_table`` when given (the R7 ``EPSF``
+    rows, see :func:`zone_table_from_epsf`) and from the QR2 PSF header
+    otherwise; the lattice is inferred from it (:func:`zone_lattice`).
+
     ``zone_margin`` widens the retained rectangle by that many zones on every
-    side (clipped to the 11x11 lattice). Without it the rectangle spans only
+    side (clipped to the lattice). Without it the rectangle spans only
     the zones nearest the cutout's two corners, so a cutout smaller than the
-    ~185 detector px zone pitch keeps a SINGLE plane — enough to pick a
-    nearest-zone PSF, but not enough to interpolate between zones, which
-    downstream forced photometry wants (a tile can otherwise sit ~93 px from
-    the kernel it uses). One margin ring takes a small cutout from 1 plane to
-    up to 9; each plane is 101x101 float32 = 41 kB, so the cost is ~0.4 MB
-    per cutout. Pass ``zone_margin=0`` to reproduce bundles written before
-    this default changed.
+    zone pitch (~185 detector px on QR2, ~97 px on R7) keeps a SINGLE plane —
+    enough to pick a nearest-zone PSF, but not enough to interpolate between
+    zones, which downstream forced photometry wants (a tile can otherwise sit
+    ~93 px from the kernel it uses). One margin ring takes a small cutout from
+    1 plane to up to 9; each QR2 plane is 101x101 float32 = 41 kB, an R7 one
+    33x33 float64 = 9 kB. Pass ``zone_margin=0`` to reproduce bundles written
+    before this default changed.
     """
-    table = build_zone_table(psf_header)
+    table = zone_table if zone_table is not None else build_zone_table(psf_header)
+    zone_ix, zone_iy = zone_lattice(table)
+    table_index = {int(z): i for i, z in enumerate(table["zone_id"])}
 
     ny, nx = cutout_shape
     xlo, ylo = pixel_origin
@@ -110,39 +155,43 @@ def subset_zones_for_cutout(
 
     zid_ll = nearest_zone(xlo, ylo, table)
     zid_ur = nearest_zone(xhi, yhi, table)
-    zx_ll, zy_ll = ZONE_X_INDEX[zid_ll - 1], ZONE_Y_INDEX[zid_ll - 1]
-    zx_ur, zy_ur = ZONE_X_INDEX[zid_ur - 1], ZONE_Y_INDEX[zid_ur - 1]
+    r_ll, r_ur = table_index[zid_ll], table_index[zid_ur]
+    zx_ll, zy_ll = zone_ix[r_ll], zone_iy[r_ll]
+    zx_ur, zy_ur = zone_ix[r_ur], zone_iy[r_ur]
     if zx_ur < zx_ll:
         zx_ll, zx_ur = zx_ur, zx_ll
     if zy_ur < zy_ll:
         zy_ll, zy_ur = zy_ur, zy_ll
 
     m = max(int(zone_margin), 0)
-    zx_ll = max(int(zx_ll) - m, int(ZONE_X_INDEX.min()))
-    zx_ur = min(int(zx_ur) + m, int(ZONE_X_INDEX.max()))
-    zy_ll = max(int(zy_ll) - m, int(ZONE_Y_INDEX.min()))
-    zy_ur = min(int(zy_ur) + m, int(ZONE_Y_INDEX.max()))
+    zx_ll = max(int(zx_ll) - m, int(zone_ix.min()))
+    zx_ur = min(int(zx_ur) + m, int(zone_ix.max()))
+    zy_ll = max(int(zy_ll) - m, int(zone_iy.min()))
+    zy_ur = min(int(zy_ur) + m, int(zone_iy.max()))
 
     sel = (
-        (ZONE_X_INDEX >= zx_ll)
-        & (ZONE_X_INDEX <= zx_ur)
-        & (ZONE_Y_INDEX >= zy_ll)
-        & (ZONE_Y_INDEX <= zy_ur)
+        (zone_ix >= zx_ll)
+        & (zone_ix <= zx_ur)
+        & (zone_iy >= zy_ll)
+        & (zone_iy <= zy_ur)
     )
     plane_idx = np.where(sel)[0]
     if plane_idx.size == 0:
-        plane_idx = np.array([nearest_zone((xlo + xhi) / 2, (ylo + yhi) / 2, table) - 1])
+        plane_idx = np.array([table_index[nearest_zone((xlo + xhi) / 2, (ylo + yhi) / 2, table)]])
 
-    cube = np.asarray(psf_cube[plane_idx, :, :], dtype=np.float32)
-    lookup = Table(
-        {
-            "zone_id": table["zone_id"][plane_idx],
-            "x": table["x"][plane_idx],
-            "y": table["y"][plane_idx],
-            "plane_idx": np.arange(plane_idx.size, dtype=np.int32),
-        }
-    )
-    zone_grid_xy = np.column_stack([ZONE_X_INDEX[plane_idx], ZONE_Y_INDEX[plane_idx]])
+    dtype = np.float64 if psf_cube.dtype == np.float64 else np.float32
+    cube = np.asarray(psf_cube[plane_idx, :, :], dtype=dtype)
+    cols = {
+        "zone_id": table["zone_id"][plane_idx],
+        "x": table["x"][plane_idx],
+        "y": table["y"][plane_idx],
+        "plane_idx": np.arange(plane_idx.size, dtype=np.int32),
+    }
+    for col in ZONE_EXTRA_COLUMNS:
+        if col in table.colnames:
+            cols[col] = table[col][plane_idx]
+    lookup = Table(cols)
+    zone_grid_xy = np.column_stack([zone_ix[plane_idx], zone_iy[plane_idx]])
     return PSFZoneSubset(cube=cube, lookup=lookup, zone_grid_xy=zone_grid_xy)
 
 

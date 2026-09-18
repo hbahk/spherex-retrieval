@@ -76,6 +76,21 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
         HDU ?  CWAVE      (per-pixel central wavelength, microns)
         HDU ?  CBAND      (per-pixel bandwidth, microns)
         HDU ?  SAPM       (solid-angle per pixel, arcsec^2)
+
+    The layout is the same for both PSF kinds; the PRIMARY header says which:
+
+        PSFKIND  'OPTICAL' (QR2 cube, 10x, the pixel response NOT included)
+                 or 'EPSF' (R7 effective PSF, 5x, pixel response included:
+                 render by point sampling, never integrate again)
+        OVERSAMP oversampling of the PSF planes (10 or 5)
+        PSFNORM  'hr-sum-1': each plane sums to 1 on its own oversampled grid
+        EPSFCAL  the ePSF calibration source file (R7 only)
+        DETCOORD 'sky' (R7 only): the arrays and zone centres are in the L2
+                 image orientation for every detector, no mirroring needed
+        ZONENX / ZONENY  lattice size of the full product (11x11, 21x21, 11x41)
+
+    ``PSF_ZONES`` carries ``zone_id, x, y, plane_idx`` (0-based detector px
+    centres) and, for the R7 product, ``xwidth, ywidth, nstar, neff``.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +118,23 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
         )
         h["OVERSAMP"] = (bundle.cutout.psf_oversamp, "PSF oversampling factor")
         h["PSFSRC"] = (bundle.cutout.psf_source[:68], "PSF cube origin")
+        effective = bundle.cutout.psf_kind == "effective"
+        h["PSFKIND"] = ("EPSF" if effective else "OPTICAL",
+                        "EPSF: pixel response included, point-sample it")
+        h["PSFNORM"] = ("hr-sum-1", "each PSF plane sums to 1 on its oversampled grid")
+        if effective:
+            from .psf_shared import epsf_source_file
+            src = epsf_source_file(bundle.cutout.psf_header)
+            if src:
+                h["EPSFCAL"] = (src[:68], "ePSF calibration source file")
+            if "DETCOORD" in bundle.cutout.psf_header:
+                h["DETCOORD"] = (str(bundle.cutout.psf_header["DETCOORD"]),
+                                 "ePSF coordinate frame (matches the L2 image)")
+        if bundle.cutout.psf_table is not None:
+            from .psf import zone_lattice, zone_table_from_epsf
+            ix, iy = zone_lattice(zone_table_from_epsf(bundle.cutout.psf_table))
+            h["ZONENX"] = (int(ix.max()), "PSF zone lattice size along x")
+            h["ZONENY"] = (int(iy.max()), "PSF zone lattice size along y")
 
     cut = bundle.cutout
     image_hdu = fits.ImageHDU(cut.image, header=cut.image_header, name="IMAGE")
@@ -112,11 +144,16 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
 
     psf_hdu = fits.ImageHDU(
         bundle.psf_subset.cube if bundle.psf_subset else cut.psf_cube,
-        header=cut.psf_header,
+        header=_psf_image_header(cut.psf_header, cut.psf_kind),
         name="PSF",
     )
     if bundle.psf_subset is not None:
         psf_zones_hdu = fits.BinTableHDU(bundle.psf_subset.lookup, name="PSF_ZONES")
+    elif cut.psf_table is not None:
+        from .psf import zone_table_from_epsf
+        full = zone_table_from_epsf(cut.psf_table)
+        full["plane_idx"] = np.arange(len(full), dtype=np.int32)
+        psf_zones_hdu = fits.BinTableHDU(full, name="PSF_ZONES")
     else:
         psf_zones_hdu = fits.BinTableHDU(Table(names=("zone_id", "x", "y", "plane_idx")),
                                          name="PSF_ZONES")
@@ -134,6 +171,29 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
 
     fits.HDUList(hdus).writeto(path, overwrite=True)
     return path
+
+
+_EPSF_HEADER_KEYS = ("DETECTOR", "OVSMPX", "OVSMPY", "MAXIT", "SMOOTH", "JUNKCLN", "KEEPNAT",
+                     "KEEPOS", "DETCOORD", "ORDERING", "BINSRC", "GEOMSRC", "NEFFSRC", "WVMSRC",
+                     "CWAVESRC", "CBANDSRC")
+
+
+def _psf_image_header(psf_header: fits.Header, psf_kind: str) -> fits.Header:
+    """The header of the bundle's ``PSF`` image HDU.
+
+    The QR2 ``PSF`` header is an image header and is kept as is (the zone
+    keywords live there). The R7 ``EPSF`` header describes a binary table,
+    so only its descriptive cards and HISTORY are carried over."""
+    if psf_kind != "effective":
+        return psf_header
+    out = fits.Header()
+    for key in _EPSF_HEADER_KEYS:
+        if key in psf_header:
+            out[key] = (psf_header[key], psf_header.comments[key])
+    out["OVERSAMP"] = (int(psf_header.get("OVSMPX", 5)), "PSF oversampling factor")
+    for card in psf_header.get("HISTORY", []):
+        out["HISTORY"] = str(card)
+    return out
 
 
 def write_summary(bundles: list[Bundle], path: Path) -> Path:

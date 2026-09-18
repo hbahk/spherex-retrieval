@@ -20,6 +20,7 @@ backend to restrict the results to a single SPHEREx detector.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 import astropy.units as u
@@ -42,8 +43,40 @@ def _empty_canonical_table() -> Table:
         }
     )
 
-CollectionName = Literal["spherex_qr2", "spherex_qr2_deep", "spherex_qr2_cal"]
-SUPPORTED_COLLECTIONS = ("spherex_qr2", "spherex_qr2_deep")
+CollectionName = Literal["spherex_qr2", "spherex_qr2_deep", "spherex_qr2_cal",
+                         "spherex_qr3", "spherex_qr3_deep", "spherex_qr3_cal"]
+#: Default search order: every quick release, oldest first. QR2 files carry the
+#: optical PSF cube, QR3 (pipeline R7) files the effective PSF (``EPSF``); the
+#: bundle records which (``PSFKIND``), so mixing releases in one retrieval is
+#: fine for the retrieval — the photometry layer groups by kind.
+SUPPORTED_COLLECTIONS = ("spherex_qr2", "spherex_qr2_deep", "spherex_qr3", "spherex_qr3_deep")
+#: Releases that IRSA's SIA2/CAOM service does not list (2026-09-18: QR3 images
+#: are in the ``spherex.plane``/``spherex.artifact`` TAP tables but not in
+#: CAOM); their discovery falls back to the TAP backend automatically.
+SIA2_MISSING_RELEASES = ("qr3",)
+
+_RELEASE_RE = re.compile(r"^spherex_([a-z0-9]+?)(?:_deep|_cal)?$")
+_RELEASE_URI_RE = re.compile(r"/spherex/([a-z0-9]+)/")
+
+
+def release_of_collection(collection: str) -> str:
+    """``'spherex_qr3_deep' -> 'qr3'``: the data-release directory of a collection."""
+    m = _RELEASE_RE.match(str(collection))
+    if not m:
+        raise ValueError(f"not a SPHEREx collection name: {collection!r}")
+    return m.group(1)
+
+
+def release_of_url(url: str) -> str | None:
+    """``'.../ibe/data/spherex/qr3/level2/...' -> 'qr3'`` (``None`` if absent)."""
+    m = _RELEASE_URI_RE.search(str(url))
+    return m.group(1) if m else None
+
+
+def observation_id_from_filename(name: str) -> str:
+    """``level2_2026W32_1A_0001_1D1_spx_l2b-v27-2026-223.fits -> 2026W32_1A_0001_1``."""
+    m = re.search(r"level2_(\d{4}W\d{2}_\d[A-Z]_\d{4}_\d)D\d_", str(name).rsplit("/", 1)[-1])
+    return m.group(1) if m else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -166,26 +199,27 @@ def query_tap(
     coord: SkyCoord,
     size: u.Quantity,  # noqa: ARG001 (kept for parity with sia2 signature)
     *,
-    collection: CollectionName = "spherex_qr2",  # noqa: ARG001
+    collection: CollectionName = "spherex_qr2",
     bandpass: str | None = None,
-    timeout: float = 120.0,  # noqa: ARG001
+    timeout: float = 120.0,
 ) -> Table:
-    """Alternate backend using pyvo + ADQL.
+    """Alternate backend: ADQL against IRSA's ``spherex.plane`` / ``spherex.artifact``.
 
-    The ADQL schema served by IRSA exposes ``spherex.artifact`` /
-    ``spherex.plane`` tables.  We return a raw access URL (the L2 MEF,
-    not a cutout) so the cutout layer can decide between IRSA cutout-
-    service or S3 byte-range paths.
+    The point-in-footprint test uses ``p.poly``; the release is selected by
+    the artifact path (``.../spherex/<release>/level2/...``), which is how
+    the ``qr3`` images are reachable while SIA2 does not list them. Returns
+    raw L2 MEF URLs (not cutouts) so the cutout layer can choose the IRSA
+    cutout service or S3 byte ranges; the S3 URI is derived from the IBE
+    path, since the TAP artifact table carries no cloud column. The SPHEREx
+    observation id is parsed from the file name (``p.obsid`` is a UUID).
 
     Set ``bandpass`` (e.g. ``'SPHEREx-D2'``) to filter by detector at
-    the query level.
+    the query level. Uses ``pyvo`` when importable, else the sync endpoint
+    over HTTP.
     """
-    import pyvo
-
+    release = release_of_collection(collection)
     ra = coord.icrs.ra.to_value(u.deg)
     dec = coord.icrs.dec.to_value(u.deg)
-
-    service = pyvo.dal.TAPService(TAP_ENDPOINT)
     extra_filter = (
         f"AND p.energy_bandpassname = '{bandpass}'" if bandpass else ""
     )
@@ -193,29 +227,31 @@ def query_tap(
     SELECT
         a.uri AS access_path,
         p.time_bounds_lower,
-        p.obs_id,
-        p.energy_bandpassname
+        p.obsid,
+        p.energy_bandpassname,
+        p.provenance_version
     FROM spherex.artifact a
     JOIN spherex.plane p ON a.planeid = p.planeid
     WHERE 1 = CONTAINS(POINT('ICRS', {ra}, {dec}), p.poly)
+        AND a.uri LIKE '%/spherex/{release}/level2/%'
         {extra_filter}
     ORDER BY p.time_bounds_lower
     """
-    raw = service.search(adql).to_table()
+    raw = _run_adql(adql, timeout=timeout)
     n = len(raw)
     if n == 0:
         return _empty_canonical_table()
 
+    paths = [str(p).lstrip("/") for p in raw["access_path"]]
     bandpasses = [str(s) for s in raw["energy_bandpassname"]]
     return Table(
         {
             "access_url": np.asarray(
-                [f"https://irsa.ipac.caltech.edu/{p.lstrip('/')}"
-                 for p in raw["access_path"]],
-                dtype=str,
-            ),
-            "cloud_uri": np.asarray([""] * n, dtype=str),
-            "obs_id": np.asarray([str(s) for s in raw["obs_id"]], dtype=str),
+                [f"https://irsa.ipac.caltech.edu/{p}" for p in paths], dtype=str),
+            "cloud_uri": np.asarray(
+                [f"s3://nasa-irsa-spherex/{p.split('ibe/data/spherex/', 1)[1]}"
+                 if "ibe/data/spherex/" in p else "" for p in paths], dtype=str),
+            "obs_id": np.asarray([observation_id_from_filename(p) for p in paths], dtype=str),
             "bandpass": np.asarray(bandpasses, dtype=str),
             "detector": np.asarray(
                 [_detector_from_bandpass(s) for s in bandpasses], dtype=np.int32
@@ -226,6 +262,24 @@ def query_tap(
             "collection": np.asarray([collection] * n, dtype=str),
         }
     )
+
+
+def _run_adql(adql: str, *, timeout: float = 120.0) -> Table:
+    """Run a synchronous ADQL query; ``pyvo`` if available, else plain HTTP."""
+    try:
+        import pyvo
+    except ImportError:
+        pyvo = None
+    if pyvo is not None:
+        service = pyvo.dal.TAPService(TAP_ENDPOINT)
+        return service.search(adql).to_table()
+    import io
+
+    import requests
+    resp = requests.get(f"{TAP_ENDPOINT}/sync", params={"QUERY": adql, "FORMAT": "csv"},
+                        timeout=timeout)
+    resp.raise_for_status()
+    return Table.read(io.StringIO(resp.text), format="ascii.csv")
 
 
 # --------------------------------------------------------------------------- #
@@ -245,7 +299,11 @@ def find_overlapping(
     tables = []
     for col in collections:
         if backend == "astroquery":
-            t = query_sia2(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
+            if release_of_collection(col) in SIA2_MISSING_RELEASES:
+                # not in CAOM/SIA2 yet: the TAP tables have the footprints
+                t = query_tap(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
+            else:
+                t = query_sia2(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
         elif backend == "pyvo":
             t = query_tap(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
         else:
