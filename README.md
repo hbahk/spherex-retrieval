@@ -91,6 +91,8 @@ Each per-cutout MEF:
 | Discovery  | `query_backend="astroquery"` (SIA2) | `"pyvo"` (ADQL TAP — no SIA ingestion lag)              |
 | Cutout     | `cutout_backend="irsa"` (server-side cutout) | `"fsspec"` byte-range over HTTP or `s3://`     |
 | Wavelength | `include_wavelength=True` (CWAVE/CBAND) | `False` to skip                                     |
+| Calibration release | `calibration_release="qr3"` (R7 spectral WCS and SAPM for every image, QR2 included) | `None` for each image's own release (the paper's configuration) |
+| Gain correction | `gain_correction=True` (QR2 IMAGE × the R7 `l3_flux_corrections` factor, VARIANCE × factor²; recorded as `FLXCORR`) | `False` to keep the QR2 gains (the paper's configuration) |
 | PSF        | `subset_psf=True` (overlapping zones only) | `False` to keep all 121 planes                   |
 | PSF product | `psf_source="epsf-cal"` (every image gets the R7 effective PSF: R7 images share their own `epsf` library, QR2 images get the `epsf_release` library instead of their optical cube; one download per detector, cutout download stops before the PSF data) | `"cal"` for the product of the image's own release (the QR2 cube on QR2 images: the paper's configuration); `"l2"` to download it with every cutout; `psf_verify_every=N`, `psf_cal_token=...`, `epsf_release="qr3"` |
 | Bandpass   | all detectors         | `bandpass="SPHEREx-D2"` (filter applied at query time)                |
@@ -169,8 +171,30 @@ Pin a specific cal version (matching legacy results) with `sapm_cal_token="cal-s
 The Explanatory Supplement explicitly flags the L2 `WCS-WAVE` lookup table as **visualization-only**
 (~1 nm accuracy via bilinear interpolation) and recommends the standalone Spectral WCS cal product
 (`CWAVE` + `CBAND`) for science.  This package uses the latter: the matching cal file is located
-via SIA2 (`COLLECTION=spherex_qr2_cal`) and cropped to the same pixel box as the science cutout
-using `.section[ylo:..., xlo:...]`, so cloud reads only fetch the relevant pixel slab.
+via SIA2 (`COLLECTION=spherex_<release>_cal`) or the IRSA directory listing and cropped to the
+same pixel box as the science cutout using `.section[ylo:..., xlo:...]`, so cloud reads only
+fetch the relevant pixel slab.
+
+Which release's calibration is a choice (`calibration_release`, default `"qr3"`): the spectral
+WCS and the solid-angle map are properties of the detector in the L2 pixel frame (`DETCOORD =
+'sky'` in both releases), so the R7 on-sky calibration is applied to QR2 images as well. Between
+`cal-wcs-v4-2025-254` (QR2) and `cal-swcs-v5-2026-191` (R7) the D1 maps are identical and band 5
+is shifted by a constant +0.0064 µm (about a fifth of a channel); bands 5 and 6 are the ones the
+Supplement says were recalibrated against on-sky data. `calibration_release=None` takes each
+image's own release.
+
+### QR2 gains → R7 gains (`gain_correction`)
+
+The absolute gain was re-derived for R7, and the Supplement advises caution when combining QR2
+and QR3 data. The SSDC's `l3_flux_corrections_D<n>` products (`qr3/l3_flux_corrections/cal-flxc-v1-2026-191`)
+are per-pixel *multiplicative* factors for pre-QR3 data (D1 median 0.970, varying 0.875–0.983
+along the dispersion direction; D5 median 1.007). With `gain_correction=True` (default) a QR2
+cutout's `IMAGE` is multiplied by the cropped factor and its `VARIANCE` by the factor squared
+before writing; `ZODI` (a model in physical units) is left alone; the few dead/hot-pixel factors
+(outside 0.5–2) are replaced by their detector-row median. The bundle records `FLXCORR` (cal
+token), `FLXCMED` (median factor over the cutout), `FLXCSRC` and `FLXCNREP`. R7 images are never
+touched. This is a stop-gap until DR1 reprocesses the QR2 epochs with the R7 gains;
+`gain_correction=False` keeps the QR2 gains (the paper's configuration).
 
 ### Two PSF kinds: QR2 optical cube and R7 effective PSF (`PSFKIND`)
 
