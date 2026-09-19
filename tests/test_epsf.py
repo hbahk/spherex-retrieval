@@ -344,3 +344,25 @@ def test_qr2_bundle_keywords_say_optical(tmp_path):
         assert h["PSFKIND"] == "OPTICAL" and h["OVERSAMP"] == 10
         assert "EPSFCAL" not in h and "ZONENX" not in h
         np.testing.assert_array_equal(hdul["PSF"].data, CUBE)
+
+
+def test_cached_full_download_still_gets_the_library_in_attach_mode(monkeypatch, tmp_path):
+    """A warm HTTP cache holds the full QR2 MEF (optical cube). With a verifying
+    registry that copy is used as is; with an attaching registry (epsf-cal on a
+    QR2 image) the R7 library must still replace the cube."""
+    from tests.test_shared_psf import _mef_bytes as _qr2_mef_bytes
+    body = _qr2_mef_bytes()
+    _serve(monkeypatch, tmp_path, body)
+    coord = SkyCoord(10.0, 20.0, unit="deg")
+    # first: a plain full download populates the cache for this URL
+    plain = fetch_irsa_cutout(URL, coord, 1 * u.arcmin)
+    assert plain.psf_kind == "optical"
+    lib = epsf_library_from_hdu(_epsf_table())
+    # verifying registry: the cached file's own product
+    kept = fetch_irsa_cutout(URL, coord, 1 * u.arcmin, psf_registry=_registry(lib, verify_every=0))
+    assert kept.psf_kind == "optical" and kept.psf_source == "l2"
+    # attaching registry: the library, even though the file is cached
+    got = fetch_irsa_cutout(URL, coord, 1 * u.arcmin, psf_registry=_registry(lib, verify=False))
+    assert got.psf_kind == "effective" and got.psf_cube.shape == (441, 33, 33)
+    assert got.psf_source == "epsf:epsf_D4_spx_cal-epsf-v1-2026-191.fits" and got.psf_oversamp == 5
+    np.testing.assert_array_equal(got.image, plain.image)

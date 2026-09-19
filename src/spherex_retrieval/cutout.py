@@ -94,10 +94,23 @@ def fetch_irsa_cutout(
 
     if detector is None:
         detector = _detector_from_url(access_url)
-    # A complete copy already on disk costs nothing to reuse.
-    if (psf_registry is None or detector is None
-            or url_to_cache_path(cutout_url, cache_dir=cache_dir).exists()):
+    if psf_registry is None or detector is None:
         return _full()
+    # A complete copy already on disk costs nothing to reuse. It carries the
+    # file's OWN PSF product, which is what a verifying registry ("cal") would
+    # attach anyway; an attaching registry ("epsf-cal" on a QR2 image) still
+    # has to swap in its library, or a warm HTTP cache would silently hand
+    # back the optical cube.
+    if url_to_cache_path(cutout_url, cache_dir=cache_dir).exists():
+        payload = _full()
+        if psf_registry.verify:
+            return payload
+        product = psf_registry.product(detector)
+        if product is not None:
+            for key, val in _psf_fields_from_product(product, payload.psf_header).items():
+                setattr(payload, key, val)
+            payload.psf_source = psf_registry.source_tag(detector)
+        return payload
 
     payload, source = psf_registry.fetch(
         detector,

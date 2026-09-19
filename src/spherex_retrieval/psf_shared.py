@@ -255,6 +255,10 @@ class SharedPsfRegistry:
         name = source.rsplit("/", 1)[-1]
         return f"epsf:{name}" if self.kind == "effective" else f"cal:{name}"
 
+    def source_tag(self, detector: int) -> str:
+        """The ``PSFSRC`` tag of the product loaded for ``detector``."""
+        return self._source_tag(self._state(detector).source)
+
     def product(self, detector: int):
         """The shared product for ``detector`` (loaded on first use), or
         ``None`` when it could not be loaded."""

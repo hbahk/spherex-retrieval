@@ -8,6 +8,17 @@ public API may still change between minor releases.
 
 Nothing yet.
 
+## [0.3.1] — 2026-09-19
+
+### Fixed
+
+- **`psf_source="epsf-cal"` with a warm HTTP cache.** A cutout whose full
+  download was already cached (from an earlier `"cal"`/`"l2"` retrieval of the
+  same box) was returned with the file's own QR2 optical cube, silently
+  skipping the R7 library attachment; the bundle then said `PSFKIND =
+  'OPTICAL'`. The cached pixels are still reused, but the attaching registry
+  now swaps in its library. Verifying registries (`"cal"`) are unchanged.
+
 ## [0.3.0] — 2026-09-19
 
 ### Added
