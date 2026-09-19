@@ -77,6 +77,10 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
         HDU ?  CBAND      (per-pixel bandwidth, microns)
         HDU ?  SAPM       (solid-angle per pixel, arcsec^2)
 
+    ``FLXCORR`` / ``FLXCMED`` / ``FLXCSRC`` / ``FLXCNREP`` are present when the
+    R7 flux correction was applied to a pre-R7 image (``gain_correction``):
+    IMAGE and VARIANCE then carry the R7 absolute gain, not the QR2 one.
+
     The layout is the same for both PSF kinds; the PRIMARY header says which:
 
         PSFKIND  'OPTICAL' (QR2 cube, 10x, the pixel response NOT included)
@@ -118,6 +122,13 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
         )
         h["OVERSAMP"] = (bundle.cutout.psf_oversamp, "PSF oversampling factor")
         h["PSFSRC"] = (bundle.cutout.psf_source[:68], "PSF cube origin")
+        fc = bundle.extras.get("flux_correction")
+        if fc:
+            h["FLXCORR"] = (str(fc["token"])[:68], "R7 flux correction applied to IMAGE/VARIANCE")
+            h["FLXCMED"] = (float(fc["median"]), "median correction factor over the cutout")
+            if fc.get("source_file"):
+                h["FLXCSRC"] = (str(fc["source_file"])[:68], "flux-correction calibration source file")
+            h["FLXCNREP"] = (int(fc.get("n_replaced", 0)), "wild factors replaced by their row median")
         effective = bundle.cutout.psf_kind == "effective"
         h["PSFKIND"] = ("EPSF" if effective else "OPTICAL",
                         "EPSF: pixel response included, point-sample it")

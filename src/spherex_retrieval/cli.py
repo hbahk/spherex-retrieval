@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "every cutout")
     p.add_argument("--epsf-release", default="qr3",
                    help="release whose ePSF library --psf-source epsf-cal attaches")
+    p.add_argument("--calibration-release", default="qr3",
+                   help="release whose spectral WCS (CWAVE/CBAND), SAPM and flux corrections "
+                        "are used for every image (default qr3, the R7 on-sky calibration); "
+                        "'own' takes each image's own release (the paper's configuration)")
+    p.add_argument("--no-gain-correction", action="store_true",
+                   help="do not apply the R7 l3_flux_corrections to QR2 images")
     p.add_argument("--psf-verify-every", type=int, default=200,
                    help="with --psf-source cal, download every N-th cutout per detector "
                         "in full and compare its PSF cube with the cal product "
@@ -102,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
         psf_verify_every=args.psf_verify_every,
         psf_cal_token=args.psf_cal_token,
         epsf_release=args.epsf_release,
+        calibration_release=(None if args.calibration_release == "own"
+                             else args.calibration_release),
+        gain_correction=not args.no_gain_correction,
         max_workers=args.max_workers,
         cache_dir=args.cache_dir,
     )

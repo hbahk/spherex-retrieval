@@ -7,21 +7,52 @@ from pathlib import Path
 from typing import Literal
 
 import astropy.units as u
+import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.table import Row
 
-from .bundle import Bundle, RetrievalStatus, cutout_filename, write_bundle, write_summary
+from .bundle import (
+    Bundle,
+    RetrievalStatus,
+    cutout_filename,
+    write_bundle,
+    write_summary,
+)
 from .cutout import CutoutBackend, fetch_cutout
-from .psf import (ZONE_MARGIN_DEFAULT, fix_psf_header_if_needed,
-                  subset_zones_for_cutout, zone_table_from_epsf)
-from .psf_shared import (EPSF_RELEASE_DEFAULT, PSF_VERIFY_EVERY_DEFAULT, PsfSource,
-                         SharedPsfRegistry, get_registry, psf_kind_of_release)
-from .query import (SUPPORTED_COLLECTIONS, find_overlapping, release_of_collection,
-                    release_of_url)
+from .flux_correction import (
+    apply_flux_correction,
+    crop_flux_correction,
+    find_flux_correction_product,
+)
+from .psf import (
+    ZONE_MARGIN_DEFAULT,
+    fix_psf_header_if_needed,
+    subset_zones_for_cutout,
+    zone_table_from_epsf,
+)
+from .psf_shared import (
+    EPSF_RELEASE_DEFAULT,
+    PSF_VERIFY_EVERY_DEFAULT,
+    PsfSource,
+    SharedPsfRegistry,
+    get_registry,
+    psf_kind_of_release,
+)
+from .query import (
+    SUPPORTED_COLLECTIONS,
+    find_overlapping,
+    release_of_collection,
+    release_of_url,
+)
 from .sapm import crop_sapm, find_sapm_product
 from .wavelength import crop_wavelength_maps, find_cal_product
 
 QueryBackend = Literal["astroquery", "pyvo"]
+
+#: Release whose detector calibrations (spectral WCS, SAPM, flux corrections)
+#: are applied to every image by default: the newest on-sky calibration. Bump
+#: when DR1 publishes newer products.
+CALIBRATION_RELEASE_DEFAULT = "qr3"
 
 
 def default_output_dir(coord: SkyCoord) -> Path:
@@ -49,6 +80,8 @@ def retrieve(
     psf_verify_every: int = PSF_VERIFY_EVERY_DEFAULT,
     psf_cal_token: str | None = None,
     epsf_release: str = EPSF_RELEASE_DEFAULT,
+    calibration_release: str | None = CALIBRATION_RELEASE_DEFAULT,
+    gain_correction: bool = True,
     max_workers: int = 8,
     cache_dir: Path | str | None = None,
     fsspec_kwargs: dict | None = None,
@@ -104,6 +137,22 @@ def retrieve(
     epsf_release : str
         Release whose ``epsf`` library ``psf_source="epsf-cal"`` attaches to
         images of a release without one (default ``"qr3"``).
+    calibration_release : str or None
+        Release whose per-detector calibrations are used for EVERY image:
+        the spectral WCS (``CWAVE``/``CBAND``) and the solid-angle map.
+        Default ``"qr3"``, the R7 on-sky calibration, also on QR2 images:
+        the maps are detector properties in the L2 pixel frame
+        (``DETCOORD='sky'`` in both releases; D1-D3 unchanged between them,
+        bands 5 and 6 shifted by a constant, +0.0064 um on D5). ``None``
+        takes each image's own release, the paper's configuration of record.
+    gain_correction : bool
+        Apply the R7 ``l3_flux_corrections`` of ``calibration_release`` to
+        images of an earlier release (QR2): IMAGE times the per-pixel
+        factor, VARIANCE times its square, so QR2 and R7 fluxes share the R7
+        absolute gain (D1 median factor 0.970, D5 1.007). R7 images are
+        never touched. Recorded in the bundle as ``FLXCORR`` (cal token),
+        ``FLXCMED`` (median factor over the cutout) and ``FLXCSRC``.
+        ``False`` keeps the QR2 gains (the paper's configuration).
     remote_timeout : float
         Sets ``astropy.utils.data.conf.remote_timeout``; SPHEREx reads
         often exceed the default, hence 120 s is the recommended floor
@@ -172,6 +221,8 @@ def retrieve(
             zone_margin=zone_margin,
             psf_registry=_registry_for(release),
             data_release=release,
+            calibration_release=calibration_release or release,
+            gain_correction=gain_correction,
             cache_dir=cache_dir,
             fsspec_kwargs=fsspec_kwargs,
             query_backend=query_backend,
@@ -218,10 +269,13 @@ def _retrieve_one(
     zone_margin: int = ZONE_MARGIN_DEFAULT,
     psf_registry: SharedPsfRegistry | None = None,
     data_release: str = "qr2",
+    calibration_release: str | None = None,
+    gain_correction: bool = False,
     cache_dir: Path | None,
     fsspec_kwargs: dict | None,
     query_backend: QueryBackend,
 ) -> Bundle:
+    calibration_release = calibration_release or data_release
     bundle = Bundle(
         obs_id=str(row["obs_id"]),
         detector=int(row["detector"]),
@@ -249,6 +303,26 @@ def _retrieve_one(
         bundle.status = RetrievalStatus.DOWNLOAD_FAILED
         bundle.message = f"cutout failed: {exc}"
         return bundle
+
+    if (gain_correction and bundle.cutout is not None
+            and psf_kind_of_release(data_release) == "optical"
+            and psf_kind_of_release(calibration_release) == "effective"):
+        # a pre-R7 image: bring its pixels to the R7 absolute gain
+        try:
+            http, s3, token = find_flux_correction_product(
+                bundle.detector, data_release=calibration_release)
+            target = s3 if (cutout_backend == "fsspec" and s3) else http
+            corr = crop_flux_correction(
+                target, pixel_origin=bundle.cutout.pixel_origin,
+                cutout_shape=bundle.cutout.image.shape, token=token,
+                cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs)
+            apply_flux_correction(bundle.cutout, corr)
+            bundle.extras["flux_correction"] = {
+                "token": token, "source_file": corr.source_file,
+                "median": float(np.median(corr.data)), "n_replaced": corr.n_replaced}
+        except Exception as exc:  # noqa: BLE001 - a cal-product hiccup must not lose the cutout
+            note = f"flux correction failed: {exc}"
+            bundle.message = (bundle.message + "; " + note) if bundle.message else note
 
     if bundle.cutout is not None and bundle.cutout.psf_kind == "optical":
         # Apply the SPHEREx PSF header erratum fix in-place if the file
@@ -286,7 +360,7 @@ def _retrieve_one(
         try:
             cal_http, cal_s3 = find_cal_product(
                 bundle.detector, backend=query_backend, coord=coord,
-                data_release=data_release,
+                data_release=calibration_release,
             )
             cal_target = cal_s3 if (cutout_backend == "fsspec" and cal_s3) else cal_http
             bundle.wavelength = crop_wavelength_maps(
@@ -307,7 +381,7 @@ def _retrieve_one(
                 backend=query_backend,
                 cal_token=sapm_cal_token,
                 coord=coord,
-                data_release=data_release,
+                data_release=calibration_release,
             )
             sapm_target = (
                 sapm_s3 if (cutout_backend == "fsspec" and sapm_s3) else sapm_http
