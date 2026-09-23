@@ -12,9 +12,10 @@ Two retrieval backends:
   stops right after the PSF header and the cube comes from the per-detector
   ``average_psf`` cal product instead.
 * ``fsspec`` — open the full L2 MEF (HTTP byte-range or S3) and crop on the
-  client using ``ImageHDU.section`` + :class:`~astropy.nddata.Cutout2D`.
-  Useful when running in the same AWS region as the data, or when the IRSA
-  service is unavailable.
+  client with ``ImageHDU.section`` and the cutout service's own window rule
+  (:func:`irsa_window`), so both backends cut the same pixels. Useful when
+  running in the same AWS region as the data, or when the IRSA service is
+  unavailable.
 * ``local`` — the ``fsspec`` crop applied to a file on a local file system
   (``access_url`` is its path; see the ``local`` query backend).
 
@@ -26,6 +27,7 @@ retrieved separately by :mod:`spherex_retrieval.wavelength`.
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -33,7 +35,6 @@ import astropy.units as u
 import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
-from astropy.nddata import Cutout2D
 from astropy.wcs import WCS
 
 from .io import http_fetch_until, open_fits, url_to_cache_path
@@ -321,7 +322,7 @@ def fetch_fsspec_cutout(
     psf_registry: SharedPsfRegistry | None = None,
     detector: int | None = None,
 ) -> CutoutPayload:
-    """Crop a SPHEREx L2 MEF on the client using ``.section`` + Cutout2D."""
+    """Crop a SPHEREx L2 MEF on the client (``.section`` reads, IRSA's window)."""
     if detector is None:
         detector = _detector_from_url(target)
     if psf_registry is None or detector is None:
@@ -339,6 +340,63 @@ def fetch_fsspec_cutout(
     return payload
 
 
+def irsa_window(x: float, y: float, n: tuple[int, int],
+                shape: tuple[int, int]) -> tuple[slice, slice] | None:
+    """The detector window IRSA's cutout service returns, as ``(rows, cols)`` slices.
+
+    ``(x, y)`` is the target's 0-based pixel position (SIP applied), ``n`` the
+    box size in pixels per axis ``(nx, ny)``, ``shape`` the frame ``(ny, nx)``.
+    The first pixel along an axis is ``floor(c + 1 - n/2)``: for odd ``n`` the
+    box is centred on the pixel holding the target, for even ``n`` on the
+    pixel corner nearest to it. The box is trimmed to the frame; ``None`` when
+    nothing is left. Measured against the service on QR2 frames for
+    ``n`` = 10, 12, 15, 16, 17 and 20 (both parities, both halves of a pixel).
+    """
+    out = []
+    for c, m, full in ((y, n[1], shape[0]), (x, n[0], shape[1])):
+        lo = int(np.floor(c + 1.0 - m / 2.0))
+        a, b = max(lo, 0), min(lo + m, full)
+        if b <= a:
+            return None
+        out.append(slice(a, b))
+    return out[0], out[1]
+
+
+def box_pixels(size: u.Quantity, wcs: WCS) -> tuple[int, int]:
+    """``(nx, ny)`` of a ``size`` box: ``round(size / pixel scale)`` per axis.
+
+    The scales are the linear-WCS ones (``proj_plane_pixel_scales``); like
+    IRSA's service, an anisotropic scale can give ``nx != ny``.
+    """
+    from astropy.wcs.utils import proj_plane_pixel_scales
+
+    scales = np.abs(proj_plane_pixel_scales(wcs)) * 3600.0          # arcsec per pixel
+    arcsec = size.to_value(u.arcsec)
+    return tuple(max(1, int(np.round(arcsec / s))) for s in scales[:2])
+
+
+_CRPIX_RE = re.compile(r"^CRPIX([12])([A-Z]?)$")
+
+
+def _shift_reference_pixels(header: fits.Header, x0: int, y0: int) -> fits.Header:
+    """A copy of ``header`` for the window starting at 0-based ``(x0, y0)``.
+
+    Every WCS reference pixel moves with the window, as in the cutout
+    service's headers: ``CRPIX1/2`` (celestial, with SIP) and the alternates
+    ``CRPIX1A/2A`` (detector pixels: the cutout value ``1 - x0`` reads back as
+    the 0-based detector origin) and ``CRPIX1W/2W`` (wavelength). A missing
+    ``CRPIX*A`` counts as the full frame's ``1``.
+    """
+    out = header.copy()
+    for axis in ("1", "2"):
+        out.setdefault(f"CRPIX{axis}A", 1.0)
+    for key in list(out.keys()):
+        m = _CRPIX_RE.match(key)
+        if m:
+            out[key] = float(out[key]) - (x0 if m.group(1) == "1" else y0)
+    return out
+
+
 def _fsspec_cutout(
     target: str,
     coord: SkyCoord,
@@ -348,8 +406,11 @@ def _fsspec_cutout(
     psf_cube: np.ndarray | None = None,
     psf_product=None,
 ) -> CutoutPayload:
-    """``psf_product`` (or ``psf_cube``) given: skip the PSF data read and
-    attach that product."""
+    """Crop the full MEF with IRSA's window rule (:func:`irsa_window`).
+
+    ``psf_product`` (or ``psf_cube``) given: skip the PSF data read and attach
+    that product.
+    """
     if psf_product is None:
         psf_product = psf_cube
     with open_fits(target, mode="auto", fsspec_kwargs=fsspec_kwargs) as hdul:
@@ -360,49 +421,42 @@ def _fsspec_cutout(
         zodi_hdu = hdul["ZODI"] if "ZODI" in hdul else hdul[4]
         psf_hdu = _find_psf_hdu(hdul)
 
-        wcs_full = WCS(image_hdu.header).celestial
-        size_pix = _size_to_pixels(size, wcs_full)
+        header = image_hdu.header
+        wcs_full = WCS(header).celestial
+        x, y = wcs_full.world_to_pixel(coord)          # SIP applied
+        full_shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
+        window = irsa_window(float(x), float(y), box_pixels(size, wcs_full), full_shape)
+        if window is None:
+            raise ValueError(f"the {size} box around {coord.to_string('decimal')} "
+                             f"does not overlap the frame")
+        rows, cols = window
 
-        cut_image = Cutout2D(image_hdu.section, position=coord, size=size_pix,
-                             wcs=wcs_full, copy=True, mode="trim")
-        sl = cut_image.slices_original  # (y_slice, x_slice)
-
-        flags = np.asarray(flags_hdu.section[sl[0], sl[1]])
-        var = np.asarray(var_hdu.section[sl[0], sl[1]])
-        zodi = np.asarray(zodi_hdu.section[sl[0], sl[1]])
+        image = np.asarray(image_hdu.section[rows, cols])
+        flags = np.asarray(flags_hdu.section[rows, cols])
+        var = np.asarray(var_hdu.section[rows, cols])
+        zodi = np.asarray(zodi_hdu.section[rows, cols])
         if psf_product is None:
             psf_fields = _psf_fields_from_hdu(psf_hdu)
         else:
             psf_fields = _psf_fields_from_product(psf_product, psf_hdu.header.copy())
 
-        cropped_header = image_hdu.header.copy()
-        cropped_header.update(cut_image.wcs.to_header())
-        cropped_header["NAXIS1"] = cut_image.data.shape[1]
-        cropped_header["NAXIS2"] = cut_image.data.shape[0]
-        # Encode the cutout origin so downstream code can map back to detector pixels.
-        cropped_header["CRPIX1A"] = sl[1].start + 1
-        cropped_header["CRPIX2A"] = sl[0].start + 1
-        pixel_origin = (sl[1].start, sl[0].start)
+        cropped_header = _shift_reference_pixels(header, cols.start, rows.start)
+        cropped_header["NAXIS1"] = image.shape[1]
+        cropped_header["NAXIS2"] = image.shape[0]
+        pixel_origin = (cols.start, rows.start)
 
         return CutoutPayload(
-            image=np.asarray(cut_image.data),
+            image=image,
             flags=flags,
             variance=var,
             zodi=zodi,
             image_header=cropped_header,
             primary_header=primary,
-            spatial_wcs=cut_image.wcs,
-            detector=int(image_hdu.header.get("DETECTOR", -1)),
+            spatial_wcs=WCS(cropped_header).celestial,
+            detector=int(header.get("DETECTOR", -1)),
             pixel_origin=pixel_origin,
             **psf_fields,
         )
-
-
-def _size_to_pixels(size: u.Quantity, wcs: WCS) -> tuple[int, int]:
-    """Convert an angular size to a square pixel size for Cutout2D."""
-    pscale = np.abs(wcs.proj_plane_pixel_scales()[0]).to(u.arcsec)
-    n = int(np.ceil((size.to(u.arcsec) / pscale).value))
-    return (n, n)
 
 
 # --------------------------------------------------------------------------- #

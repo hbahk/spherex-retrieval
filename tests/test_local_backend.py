@@ -20,7 +20,13 @@ pytest.importorskip("scipy")
 
 from spherex_retrieval import cal_index, core, flux_correction, psf_shared, query  # noqa: E402
 from spherex_retrieval import index as sidx  # noqa: E402
-from spherex_retrieval.cutout import fetch_cutout  # noqa: E402
+from spherex_retrieval.cutout import (  # noqa: E402
+    _payload_from_irsa_hdul,
+    box_pixels,
+    fetch_cutout,
+    irsa_window,
+)
+from spherex_retrieval.psf import cutout_to_orig  # noqa: E402
 
 NAME = "level2_2025W30_1B_0325_1D4_spx_l2b-v20-2025-262.fits"
 NPIX = 64
@@ -174,7 +180,11 @@ def test_local_cutout_crops_the_file_in_place(archive):
     fx, fy = _frame_wcs().world_to_pixel_values(10.001, 20.002)
     cx, cy = payload.spatial_wcs.world_to_pixel_values(10.001, 20.002)
     assert np.allclose([cx + x0, cy + y0], [fx, fy])
-    assert payload.image_header["CRPIX1A"] == x0 + 1
+    # the 'A' (detector-pixel) reference moves with the window, as in an IRSA
+    # cutout: 1 - CRPIX*A reads back as the 0-based detector origin
+    assert (payload.image_header["CRPIX1A"], payload.image_header["CRPIX2A"]) == (1 - x0, 1 - y0)
+    assert cutout_to_orig(0, 0, crpix1a=payload.image_header["CRPIX1A"],
+                          crpix2a=payload.image_header["CRPIX2A"]) == (x0, y0)
 
 
 def test_retrieve_end_to_end_offline(archive, tmp_path):
@@ -191,6 +201,8 @@ def test_retrieve_end_to_end_offline(archive, tmp_path):
         x0, y0 = bundles[0].cutout.pixel_origin
         assert h["IMAGE"].data.shape == (5, 5)
         np.testing.assert_array_equal(h["IMAGE"].data, image[y0:y0 + 5, x0:x0 + 5])
+        # a local bundle reads back like an IRSA one
+        assert _payload_from_irsa_hdul(h).pixel_origin == (x0, y0)
 
 
 def test_header_scan_reproduces_the_obscore_row(archive, tmp_path):
@@ -207,3 +219,53 @@ def test_header_scan_reproduces_the_obscore_row(archive, tmp_path):
     for key in ("s_ra", "s_dec", *sidx._CORNER_COLUMNS):
         assert from_headers[key] == pytest.approx(from_obscore[key], abs=1e-9)
     assert (from_headers["em_min"], from_headers["em_max"]) == sidx.DETECTOR_BAND_M[4]
+
+
+# Windows the IRSA cutout service returned for QSO J0233+0653 (2026-09-24):
+# (target pixel, box pixels, first pixel), two QR2 frames, both parities and
+# both halves of a pixel.
+IRSA_WINDOWS = [
+    (425.663, 10, 421), (425.663, 15, 419), (425.663, 16, 418), (425.663, 20, 416),
+    (663.787, 10, 659), (663.787, 17, 656), (663.787, 20, 654),
+    (459.123, 10, 455), (459.123, 12, 454), (1721.347, 10, 1717), (1721.347, 12, 1716),
+]
+
+
+@pytest.mark.parametrize("c, n, first", IRSA_WINDOWS)
+def test_window_start_matches_the_cutout_service(c, n, first):
+    rows, cols = irsa_window(c, c, (n, n), (4000, 4000))
+    assert (cols.start, cols.stop - cols.start) == (first, n)
+    assert (rows.start, rows.stop - rows.start) == (first, n)
+
+
+def test_window_is_trimmed_at_the_frame_edges():
+    # IRSA: x=2043.79 -> 3 columns from 2037; y=-2.55 -> 5 rows from 0
+    rows, cols = irsa_window(2043.79, -2.55, (15, 15), (2040, 2040))
+    assert (cols.start, cols.stop) == (2037, 2040) and (rows.start, rows.stop) == (0, 5)
+    assert irsa_window(2060.0, 100.0, (15, 15), (2040, 2040)) is None
+
+
+def test_box_pixels_rounds_per_axis():
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.cdelt = [-6.17 / 3600, 6.147 / 3600]
+    mean = np.sqrt(6.17 * 6.147)
+    assert box_pixels(9.9 * mean * u.arcsec, w) == (10, 10)
+    assert box_pixels(10.2 * mean * u.arcsec, w) == (10, 10)
+    # IRSA gave 16 x 17 for a 16.5-px box on a frame with unequal axis scales
+    assert box_pixels(16.5 * mean * u.arcsec, w) == (16, 17)
+    assert box_pixels(15 * 6.147 * u.arcsec, w) == (15, 15)
+
+
+def test_every_reference_pixel_moves_with_the_window():
+    from spherex_retrieval.cutout import _shift_reference_pixels
+
+    hdr = fits.Header()
+    hdr["CRPIX1"], hdr["CRPIX2"] = 1020.5, 1020.5
+    hdr["CRPIX1W"], hdr["CRPIX2W"] = 1.0, 1.0      # the wavelength WCS of an L2 IMAGE
+    out = _shift_reference_pixels(hdr, 433, 1231)
+    # IRSA's cutout of this window: CRPIX1W = -432, CRPIX2W = -1230
+    assert (out["CRPIX1W"], out["CRPIX2W"]) == (-432.0, -1230.0)
+    assert (out["CRPIX1A"], out["CRPIX2A"]) == (-432.0, -1230.0)
+    assert (out["CRPIX1"], out["CRPIX2"]) == (587.5, -210.5)
+    assert hdr["CRPIX1W"] == 1.0 and "CRPIX1A" not in hdr   # input untouched
