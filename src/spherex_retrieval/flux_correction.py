@@ -49,8 +49,17 @@ def find_flux_correction_product(
     cal_token: str | None = None,
 ) -> tuple[str, str, str]:
     """Return ``(http_url, s3_uri, token)`` of the detector's correction map."""
-    from .cal_index import cal_http_url, cal_s3_uri, latest_cal_token_via_listing
+    from .cal_index import (
+        cal_http_url,
+        cal_s3_uri,
+        latest_cal_token_via_listing,
+        local_cal_product,
+    )
 
+    local = local_cal_product("l3_flux_corrections", detector, data_release=data_release,
+                              cal_token=cal_token)
+    if local is not None:
+        return local[0], "", local[1]
     token = cal_token or latest_cal_token_via_listing(
         "l3_flux_corrections", data_release=data_release, detector=detector)
     if token is None:

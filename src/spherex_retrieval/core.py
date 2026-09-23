@@ -47,7 +47,7 @@ from .query import (
 from .sapm import crop_sapm, find_sapm_product
 from .wavelength import crop_wavelength_maps, find_cal_product
 
-QueryBackend = Literal["astroquery", "pyvo"]
+QueryBackend = Literal["astroquery", "pyvo", "local"]
 
 #: Release whose detector calibrations (spectral WCS, SAPM, flux corrections)
 #: are applied to every image by default: the newest on-sky calibration. Bump
@@ -86,11 +86,29 @@ def retrieve(
     cache_dir: Path | str | None = None,
     fsspec_kwargs: dict | None = None,
     remote_timeout: float = 120.0,
+    index=None,
+    archive_root: Path | str | None = None,
+    cal_roots: dict[str, Path | str] | None = None,
 ) -> tuple[list[Bundle], Path]:
     """Retrieve all SPHEREx cutouts overlapping ``coord`` within ``size``.
 
     Parameters
     ----------
+    query_backend : {"astroquery", "pyvo", "local"}
+        ``"local"`` searches a local archive ``index`` (see
+        :mod:`spherex_retrieval.index`) and pairs with
+        ``cutout_backend="local"``, which crops the files in place.
+    index : path or pyarrow.Table, optional
+        The local archive index (``spherex-index build``); required by
+        ``query_backend="local"``.
+    archive_root : path, optional
+        Root the index paths are relative to; defaults to the one recorded
+        in the index.
+    cal_roots : dict, optional
+        Local calibration trees by release, e.g. ``{"qr2": ".../repo"}``,
+        laid out like IRSA's ``spherex/<release>/``. Sets the process-wide
+        mapping (:func:`~spherex_retrieval.cal_index.set_local_cal_roots`);
+        releases in it never query IRSA for cal products.
     bandpass : str, optional
         Restrict to one SPHEREx detector (e.g. ``'SPHEREx-D2'``).  Filter
         is applied at query time by both backends.
@@ -196,11 +214,17 @@ def retrieve(
             use_s3=(cutout_backend == "fsspec"), fsspec_kwargs=fsspec_kwargs,
         )
 
+    if cal_roots is not None:
+        from .cal_index import set_local_cal_roots
+        set_local_cal_roots(cal_roots)
+
     overlap = find_overlapping(
         coord, size,
         backend=query_backend,
         collections=tuple(collections),
         bandpass=bandpass,
+        index=index,
+        archive_root=archive_root,
     )
 
     if len(overlap) == 0:
