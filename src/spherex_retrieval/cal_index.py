@@ -9,10 +9,18 @@ Two strategies, in order:
    the cal product family, regex out tokens of the form
    ``cal-<family>-v<N>-YYYY-DDD``, and pick the lexicographically largest
    (= latest version, then latest processing date).
+
+A release can instead be served from a **local calibration tree** laid out
+like IRSA's (``<root>/<family>/<token>/<det>/<family>_D<det>_spx_<token>.fits``),
+set with :func:`set_local_cal_roots` or ``SPHEREX_CAL_ROOTS="qr2=/a,qr3=/b"``.
+A configured release never touches the network: the token rule is the
+listing's (the latest token whose directory holds the detector), and a
+missing product is an error rather than a silent fallback to IRSA.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -60,6 +68,64 @@ def cal_s3_uri(family: CalFamily, detector: int, token: str, *, data_release: st
     return (
         f"s3://nasa-irsa-spherex/{data_release}/{family}/{token}/{detector}/{fname}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Local calibration trees
+# --------------------------------------------------------------------------- #
+
+_LOCAL_CAL_ROOTS: dict[str, Path] = {}
+
+
+def set_local_cal_roots(roots: dict[str, str | Path] | None) -> None:
+    """Serve the given releases' cal products from local trees (``None`` clears).
+
+    ``roots`` maps a data release (``"qr2"``, ``"qr3"``, ...) to a directory
+    laid out like IRSA's ``spherex/<release>/``. Process-wide; takes precedence
+    over ``SPHEREX_CAL_ROOTS``.
+    """
+    _LOCAL_CAL_ROOTS.clear()
+    for release, root in (roots or {}).items():
+        _LOCAL_CAL_ROOTS[str(release)] = Path(root)
+    _DISCOVERED.clear()
+
+
+def local_cal_roots() -> dict[str, Path]:
+    """The configured local cal roots: ``SPHEREX_CAL_ROOTS`` overlaid by
+    :func:`set_local_cal_roots`."""
+    roots: dict[str, Path] = {}
+    for item in os.environ.get("SPHEREX_CAL_ROOTS", "").split(","):
+        if "=" in item:
+            release, root = item.split("=", 1)
+            roots[release.strip()] = Path(root.strip())
+    roots.update(_LOCAL_CAL_ROOTS)
+    return roots
+
+
+def local_cal_product(family: CalFamily, detector: int, *, data_release: str,
+                      cal_token: str | None = None) -> tuple[str, str] | None:
+    """``(path, token)`` of a cal product in the local tree of ``data_release``.
+
+    ``None`` when no local root is configured for that release. With a root
+    configured, the product must be there: ``FileNotFoundError`` otherwise.
+    """
+    root = local_cal_roots().get(data_release)
+    if root is None:
+        return None
+    fam = root / family
+    if cal_token:
+        tokens = [cal_token]
+    else:
+        pattern = _token_pattern(family)
+        names = os.listdir(fam) if fam.is_dir() else []
+        tokens = sorted((n for n in names if pattern.fullmatch(n)), reverse=True)
+    for token in tokens:
+        path = fam / token / str(int(detector)) / cal_filename(family, detector, token)
+        if path.is_file():
+            return str(path), token
+    raise FileNotFoundError(
+        f"no {family} product for D{detector} under the local {data_release} cal root {root}"
+        + (f" (token {cal_token})" if cal_token else ""))
 
 
 # --------------------------------------------------------------------------- #
@@ -207,7 +273,8 @@ def discover_cal_product(
     ``coord``; one SIA2 round trip (0.6-3 s) per (family, detector) per
     process instead of one per cutout.  Failures are not cached.
     """
-    key = (family, detector, cal_token, data_release)
+    key = (family, detector, cal_token, data_release,
+           str(local_cal_roots().get(data_release, "")))
     hit = _DISCOVERED.get(key)
     if hit is None:
         hit = _DISCOVERED[key] = _discover_cal_product(
@@ -227,6 +294,8 @@ def _discover_cal_product(
     """Resolve a calibration product to ``(http_url, s3_uri)``.
 
     Resolution order:
+      0. the local cal tree of ``data_release``, if one is configured
+         (``s3_uri`` is then empty);
       1. ``cal_token`` argument (caller pinned a specific version).
       2. SIA2 (``spherex_qr2_cal`` collection, positional).
       3. HTML directory listing of the IRSA ``ibe`` browsable index.
@@ -236,6 +305,9 @@ def _discover_cal_product(
     RuntimeError
         If none of the strategies yield a valid cal token.
     """
+    local = local_cal_product(family, detector, data_release=data_release, cal_token=cal_token)
+    if local is not None:
+        return local[0], ""
     if cal_token:
         return (
             cal_http_url(family, detector, cal_token, data_release=data_release),

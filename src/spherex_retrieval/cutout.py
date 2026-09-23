@@ -15,6 +15,8 @@ Two retrieval backends:
   client using ``ImageHDU.section`` + :class:`~astropy.nddata.Cutout2D`.
   Useful when running in the same AWS region as the data, or when the IRSA
   service is unavailable.
+* ``local`` — the ``fsspec`` crop applied to a file on a local file system
+  (``access_url`` is its path; see the ``local`` query backend).
 
 The output is a :class:`CutoutPayload` dataclass that carries the cropped
 arrays, the spatial WCS, and the relevant headers.  Wavelength maps are
@@ -37,7 +39,7 @@ from astropy.wcs import WCS
 from .io import http_fetch_until, open_fits, url_to_cache_path
 from .psf_shared import SharedPsfRegistry
 
-CutoutBackend = Literal["irsa", "fsspec"]
+CutoutBackend = Literal["irsa", "fsspec", "local"]
 
 
 @dataclass
@@ -425,8 +427,8 @@ def fetch_cutout(
     if backend == "irsa":
         return fetch_irsa_cutout(access_url, coord, size, cache_dir=cache_dir,
                                  psf_registry=psf_registry, detector=detector)
-    if backend == "fsspec":
-        target = cloud_uri or access_url
+    if backend in ("fsspec", "local"):
+        target = access_url if backend == "local" else (cloud_uri or access_url)
         return fetch_fsspec_cutout(target, coord, size, fsspec_kwargs=fsspec_kwargs,
                                    psf_registry=psf_registry, detector=detector)
     raise ValueError(f"unknown cutout backend: {backend!r}")

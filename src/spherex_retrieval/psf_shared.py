@@ -100,16 +100,26 @@ def find_psf_product(
 ) -> tuple[str, str]:
     """Return ``(http_url, s3_uri)`` for the detector's PSF product of ``kind``.
 
-    Resolved from ``cal_token`` or the IRSA directory listing only.  SIA2 is
+    Resolved from the local cal tree of ``data_release`` when one is
+    configured (see :func:`~spherex_retrieval.cal_index.set_local_cal_roots`),
+    else from ``cal_token`` or the IRSA directory listing only.  SIA2 is
     deliberately skipped: a positional ``spherex_qr2_cal`` query does not
     return ``average_psf`` rows, and a position-less one scans the whole
     collection (~3 min). The listing is resolved per detector because a
     version can be re-issued for one detector only (``qr3`` D3 is on
     ``cal-epsf-v2``, the others on ``v1``).
     """
-    from .cal_index import cal_http_url, cal_s3_uri, latest_cal_token_via_listing
+    from .cal_index import (
+        cal_http_url,
+        cal_s3_uri,
+        latest_cal_token_via_listing,
+        local_cal_product,
+    )
 
     family = PSF_FAMILY[kind]
+    local = local_cal_product(family, detector, data_release=data_release, cal_token=cal_token)
+    if local is not None:
+        return local[0], ""
     token = cal_token or latest_cal_token_via_listing(
         family, data_release=data_release, detector=detector)
     if token is None:
