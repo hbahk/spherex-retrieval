@@ -281,6 +281,7 @@ def scan_headers(paths: list[str], *, workers: int = 16, chunk: int = 256):
 
     Returns ``(results, failures)``: ``{path: metadata}`` and ``{path: error}``.
     """
+    import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
     batches = [paths[i:i + chunk] for i in range(0, len(paths), chunk)]
@@ -294,7 +295,9 @@ def scan_headers(paths: list[str], *, workers: int = 16, chunk: int = 256):
                 (results.__setitem__(path, meta) if meta is not None
                  else failures.__setitem__(path, err))
         return results, failures
-    with ProcessPoolExecutor(max_workers=workers) as ex:
+    # spawn, not fork: the caller may already run threads (the directory scan)
+    with ProcessPoolExecutor(max_workers=workers,
+                             mp_context=multiprocessing.get_context("spawn")) as ex:
         for batch in ex.map(_header_rows_worker, batches):
             for path, meta, err in batch:
                 (results.__setitem__(path, meta) if meta is not None
