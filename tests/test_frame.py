@@ -207,3 +207,15 @@ def test_retrieve_catalog_reads_each_frame_once(tmp_path):
     assert sorted(out) == sorted({t for t, _ in results})
     for t, d in out.items():
         assert (d / "summary.ecsv").exists()
+
+
+def test_bundle_bytes_equal_the_written_file(tmp_path):
+    from spherex_retrieval.bundle import bundle_bytes, write_bundle
+
+    path = tmp_path / FRAME_A
+    write_l2(path)
+    (b,) = sfr.iter_frame_cutouts(path, SkyCoord([10.0], [20.0], unit="deg"), SIZE, obs_id="x",
+                                  detector=4, collection="spherex_qr2", time_bounds_lower=60880.1,
+                                  **KW)
+    out = write_bundle(b, tmp_path / "b.fits")
+    assert bundle_bytes(b) == out.read_bytes()
