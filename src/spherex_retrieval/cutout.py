@@ -43,6 +43,10 @@ from .psf_shared import SharedPsfRegistry
 CutoutBackend = Literal["irsa", "fsspec", "local"]
 
 
+class NoOverlapError(ValueError):
+    """The requested box does not overlap the frame (a spare discovery candidate)."""
+
+
 @dataclass
 class CutoutPayload:
     """Container for the spatial side of a SPHEREx cutout."""
@@ -427,8 +431,8 @@ def _fsspec_cutout(
         full_shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
         window = irsa_window(float(x), float(y), box_pixels(size, wcs_full), full_shape)
         if window is None:
-            raise ValueError(f"the {size} box around {coord.to_string('decimal')} "
-                             f"does not overlap the frame")
+            raise NoOverlapError(f"the {size} box around {coord.to_string('decimal')} "
+                                 f"does not overlap the frame")
         rows, cols = window
 
         image = np.asarray(image_hdu.section[rows, cols])

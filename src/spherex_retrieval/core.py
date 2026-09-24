@@ -18,7 +18,7 @@ from .bundle import (
     write_bundle,
     write_summary,
 )
-from .cutout import CutoutBackend, fetch_cutout
+from .cutout import CutoutBackend, NoOverlapError, fetch_cutout
 from .flux_correction import (
     apply_flux_correction,
     crop_flux_correction,
@@ -197,22 +197,10 @@ def retrieve(
         raise ValueError(f"unknown psf_source: {psf_source!r}")
 
     def _registry_for(release: str) -> SharedPsfRegistry | None:
-        """The shared-PSF registry for an image of ``release`` (None: l2)."""
-        if psf_source == "l2":
-            return None
-        if psf_source == "epsf-cal" and psf_kind_of_release(release) == "optical":
-            # a QR2 image: attach the R7 library (no check against the file possible)
-            return get_registry(
-                verify_every=psf_verify_every, cal_token=psf_cal_token,
-                data_release=epsf_release, kind="effective", verify=False,
-                cache_dir=cache_dir, use_s3=(cutout_backend == "fsspec"),
-                fsspec_kwargs=fsspec_kwargs,
-            )
-        return get_registry(
-            verify_every=psf_verify_every, cal_token=psf_cal_token,
-            data_release=release, cache_dir=cache_dir,
-            use_s3=(cutout_backend == "fsspec"), fsspec_kwargs=fsspec_kwargs,
-        )
+        return psf_registry_for(release, psf_source=psf_source, psf_verify_every=psf_verify_every,
+                                psf_cal_token=psf_cal_token, epsf_release=epsf_release,
+                                cache_dir=cache_dir, use_s3=(cutout_backend == "fsspec"),
+                                fsspec_kwargs=fsspec_kwargs)
 
     if cal_roots is not None:
         from .cal_index import set_local_cal_roots
@@ -272,6 +260,31 @@ def retrieve(
     return bundles, output_dir
 
 
+def psf_registry_for(release: str, *, psf_source: PsfSource = "epsf-cal",
+                     psf_verify_every: int = PSF_VERIFY_EVERY_DEFAULT,
+                     psf_cal_token: str | None = None,
+                     epsf_release: str = EPSF_RELEASE_DEFAULT, cache_dir=None,
+                     use_s3: bool = False,
+                     fsspec_kwargs: dict | None = None) -> SharedPsfRegistry | None:
+    """The shared-PSF registry for an image of ``release`` (``None``: ``psf_source="l2"``)."""
+    if psf_source not in ("cal", "l2", "epsf-cal"):
+        raise ValueError(f"unknown psf_source: {psf_source!r}")
+    if psf_source == "l2":
+        return None
+    if psf_source == "epsf-cal" and psf_kind_of_release(release) == "optical":
+        # a QR2 image: attach the R7 library (no check against the file possible)
+        return get_registry(
+            verify_every=psf_verify_every, cal_token=psf_cal_token,
+            data_release=epsf_release, kind="effective", verify=False,
+            cache_dir=cache_dir, use_s3=use_s3, fsspec_kwargs=fsspec_kwargs,
+        )
+    return get_registry(
+        verify_every=psf_verify_every, cal_token=psf_cal_token,
+        data_release=release, cache_dir=cache_dir, use_s3=use_s3,
+        fsspec_kwargs=fsspec_kwargs,
+    )
+
+
 def _release_of_row(row) -> str:
     """Data release of a discovery row: from its collection name, else its URL."""
     try:
@@ -323,11 +336,48 @@ def _retrieve_one(
             psf_registry=psf_registry,
             detector=bundle.detector,
         )
+    except NoOverlapError as exc:
+        bundle.status = RetrievalStatus.OUT_OF_BOUNDS
+        bundle.message = f"cutout failed: {exc}"
+        return bundle
     except Exception as exc:
         bundle.status = RetrievalStatus.DOWNLOAD_FAILED
         bundle.message = f"cutout failed: {exc}"
         return bundle
 
+    return complete_bundle(
+        bundle, coord=coord, cutout_backend=cutout_backend,
+        include_wavelength=include_wavelength, include_sapm=include_sapm,
+        sapm_cal_token=sapm_cal_token, subset_psf=subset_psf, zone_margin=zone_margin,
+        data_release=data_release, calibration_release=calibration_release,
+        gain_correction=gain_correction, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs,
+        query_backend=query_backend)
+
+
+def complete_bundle(
+    bundle: Bundle,
+    *,
+    coord: SkyCoord,
+    cutout_backend: CutoutBackend,
+    include_wavelength: bool,
+    include_sapm: bool,
+    sapm_cal_token: str | None,
+    subset_psf: bool,
+    zone_margin: int = ZONE_MARGIN_DEFAULT,
+    data_release: str = "qr2",
+    calibration_release: str | None = None,
+    gain_correction: bool = False,
+    cache_dir: Path | None,
+    fsspec_kwargs: dict | None,
+    query_backend: QueryBackend,
+) -> Bundle:
+    """Everything after the pixels: gain, PSF header erratum, zone subset, CWAVE/CBAND, SAPM.
+
+    Shared by every path that produces a :class:`CutoutPayload` (a cutout
+    backend here, a frame read in :mod:`spherex_retrieval.frame`), so the
+    bundles agree bit for bit whichever path cut the pixels.
+    """
+    calibration_release = calibration_release or data_release
     if (gain_correction and bundle.cutout is not None
             and psf_kind_of_release(data_release) == "optical"
             and psf_kind_of_release(calibration_release) == "effective"):

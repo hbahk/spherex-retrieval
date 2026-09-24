@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .io import open_fits
+from .io import cached_hdu_data, is_s3_uri, open_fits
 
 
 @dataclass
@@ -85,6 +85,12 @@ def crop_sapm(
         raise ValueError(
             f"pixel_origin must be non-negative detector pixels, got {pixel_origin!r}"
         )
+    if not is_s3_uri(cal_target):
+        full, header = cached_hdu_data(cal_target, ("IMAGE",), 1, cache_dir=cache_dir,
+                                       fsspec_kwargs=fsspec_kwargs)
+        data = np.array(full[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32)
+        bunit = str(header.get("BUNIT", "arcsec2"))
+        return SolidAnglePixelMap(data=data, bunit=bunit, source_url=cal_target)
     with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
                    fsspec_kwargs=fsspec_kwargs) as hdul:
         sapm_hdu = hdul["IMAGE"] if "IMAGE" in hdul else hdul[1]
