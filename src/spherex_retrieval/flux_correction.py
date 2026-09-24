@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .io import open_fits
+from .io import cached_hdu_data, is_s3_uri, open_fits
 
 #: Factors outside this range are treated as bad pixels and replaced by the
 #: row median (the product's own dead/hot pixels; see the module docstring).
@@ -86,16 +86,23 @@ def crop_flux_correction(
     if xlo < 0 or ylo < 0:
         raise ValueError(
             f"pixel_origin must be non-negative detector pixels, got {pixel_origin!r}")
-    with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
-                   fsspec_kwargs=fsspec_kwargs) as hdul:
-        hdu = hdul["IMAGE"] if "IMAGE" in hdul else hdul[1]
-        # the row medians come from the full rows, not the crop: a narrow
-        # cutout would otherwise take its median from a handful of pixels
-        full_rows = np.asarray(hdu.section[ylo:ylo + ny, :], dtype=np.float64)
-        source_file = ""
-        for card in hdu.header.get("HISTORY", []):
-            if "Calibration source file" in str(card):
-                source_file = str(card).split(":", 1)[1].strip()
+    # the row medians come from the full rows, not the crop: a narrow cutout
+    # would otherwise take its median from a handful of pixels
+    if not is_s3_uri(cal_target):
+        full, header = cached_hdu_data(cal_target, ("IMAGE",), 1, cache_dir=cache_dir,
+                                       fsspec_kwargs=fsspec_kwargs)
+        full_rows = np.array(full[ylo:ylo + ny, :], dtype=np.float64)
+        history = header.get("HISTORY", [])
+    else:
+        with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
+                       fsspec_kwargs=fsspec_kwargs) as hdul:
+            hdu = hdul["IMAGE"] if "IMAGE" in hdul else hdul[1]
+            full_rows = np.asarray(hdu.section[ylo:ylo + ny, :], dtype=np.float64)
+            history = list(hdu.header.get("HISTORY", []))
+    source_file = ""
+    for card in history:
+        if "Calibration source file" in str(card):
+            source_file = str(card).split(":", 1)[1].strip()
     lo, hi = FACTOR_RANGE
     bad_full = ~np.isfinite(full_rows) | (full_rows < lo) | (full_rows > hi)
     row_med = np.nanmedian(np.where(bad_full, np.nan, full_rows), axis=1)
