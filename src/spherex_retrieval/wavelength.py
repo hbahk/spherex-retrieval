@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 from astropy.coordinates import SkyCoord
 
-from .io import open_fits
+from .io import cached_hdu_data, is_s3_uri, open_fits
 
 
 @dataclass
@@ -111,6 +111,16 @@ def crop_wavelength_maps(
         raise ValueError(
             f"pixel_origin must be non-negative detector pixels, got {pixel_origin!r}"
         )
+
+    if not is_s3_uri(cal_target):
+        # local or HTTP-cached file: crop the whole maps held in memory
+        cwave_full, _ = cached_hdu_data(cal_target, ("CWAVE",), 1, cache_dir=cache_dir,
+                                        fsspec_kwargs=fsspec_kwargs)
+        cband_full, _ = cached_hdu_data(cal_target, ("CBAND",), 2, cache_dir=cache_dir,
+                                        fsspec_kwargs=fsspec_kwargs)
+        cwave = np.array(cwave_full[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32)
+        cband = np.array(cband_full[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32)
+        return WavelengthMaps(cwave=cwave, cband=cband, source_url=cal_target)
 
     with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
                    fsspec_kwargs=fsspec_kwargs) as hdul:

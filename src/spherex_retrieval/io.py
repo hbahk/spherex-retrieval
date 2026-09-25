@@ -17,11 +17,14 @@ import hashlib
 import os
 import shutil
 import tempfile
+import threading
 import urllib.parse
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator, TypeVar
 
+import numpy as np
 import requests
 from astropy.io import fits
 
@@ -199,3 +202,55 @@ def open_fits(
     else:
         with fits.open(target) as hdul:
             yield hdul
+
+
+# --------------------------------------------------------------------------- #
+# Whole calibration planes held in memory
+# --------------------------------------------------------------------------- #
+
+#: Full HDUs kept per process. A detector's CWAVE, CBAND, SAPM or flux-correction
+#: plane is 16.6 MB; 64 holds every family for six detectors in two releases.
+HDU_CACHE_MAX = 64
+_HDU_CACHE: OrderedDict = OrderedDict()
+_HDU_CACHE_LOCK = threading.Lock()
+
+
+def cached_hdu_data(target: str, names: tuple[str, ...], fallback_index: int, *,
+                    cache_dir: Path | None = None,
+                    fsspec_kwargs: dict | None = None) -> tuple[np.ndarray, fits.Header]:
+    """The full data and header of one HDU of a calibration file, read once per process.
+
+    The first EXTNAME in ``names`` present in the file is used, else HDU
+    ``fallback_index``. The array is shared and read-only; callers slice it and
+    copy what they keep. A cutout's crop from it holds the same values as a
+    ``.section`` read of the file, without reopening the file for every cutout.
+    """
+    key = (str(target), tuple(names), int(fallback_index))
+    with _HDU_CACHE_LOCK:
+        hit = _HDU_CACHE.get(key)
+        if hit is not None:
+            _HDU_CACHE.move_to_end(key)
+            return hit
+    with open_fits(target, mode="auto", cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs) as hdul:
+        hdu = None
+        for name in names:
+            if name in hdul:
+                hdu = hdul[name]
+                break
+        if hdu is None:
+            hdu = hdul[fallback_index]
+        data = np.array(hdu.data, copy=True)
+        header = hdu.header.copy()
+    data.flags.writeable = False
+    with _HDU_CACHE_LOCK:
+        _HDU_CACHE[key] = (data, header)
+        _HDU_CACHE.move_to_end(key)
+        while len(_HDU_CACHE) > HDU_CACHE_MAX:
+            _HDU_CACHE.popitem(last=False)
+    return data, header
+
+
+def clear_hdu_cache() -> None:
+    """Drop the in-memory calibration planes."""
+    with _HDU_CACHE_LOCK:
+        _HDU_CACHE.clear()

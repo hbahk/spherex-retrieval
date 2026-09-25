@@ -22,10 +22,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pytest-cov"]
+dev = ["pytest>=7", "pytest-cov", "pyarrow>=14", "scipy>=1.10"]
+local = ["pyarrow>=14", "scipy>=1.10"]
 
 [project.scripts]
 spherex-retrieve = "spherex_retrieval.cli:main"
+spherex-index = "spherex_retrieval.index:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
