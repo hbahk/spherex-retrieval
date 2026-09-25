@@ -8,6 +8,60 @@ public API may still change between minor releases.
 
 Nothing yet.
 
+## [0.3.2] — 2026-09-25
+
+### Added
+
+- **Local L2 archive.** `spherex-index build <archive_root> -o index.parquet`
+  indexes a local copy of the L2 tree: it joins the archive's ObsCore level-2
+  rows to the files on disk, indexes files no table lists from their own
+  headers (centre at the SIP position of the middle pixel, corners at the
+  outer pixel edges, `MJD-BEG`/`MJD-END`, matching ObsCore), and keeps one
+  file per exposure and detector, its latest processing version.
+  `spherex-index info` summarises an index. `find_overlapping_many` pairs many
+  targets with frames at once (KD-tree cone on frame centres, then the
+  `s_region` quadrilateral grown by half the box diagonal, in the gnomonic
+  plane), returned file-major.
+- **Local backends.** `query_backend="local"` searches an index;
+  `cutout_backend="local"` crops the files in place with the cutout service's
+  rules; `retrieve()` takes `index=`, `archive_root=` and `cal_roots=`.
+  `set_local_cal_roots()` (or `SPHEREX_CAL_ROOTS`) serves a release's
+  calibration products (spectral WCS, SAPM, average PSF, ePSF library, flux
+  corrections) from a local tree laid out like IRSA's, with no network; a
+  configured release with a missing product is an error, not a silent fall
+  back to IRSA. On the IBS olaf QR2 archive the local bundles of QSO
+  J0233+0653 are bit-identical to IRSA's in every plane (248 of 248).
+- **Frame-major extraction for many targets** (`spherex_retrieval.frame`).
+  `iter_frame_cutouts` reads each L2 frame once with raw `pread` (walking the
+  headers for the offsets; the QR2 archive has five file layouts) and cuts
+  every target on it, fetching either the four pixel planes or only the
+  detector rows the targets need; the bundles equal the per-target ones bit
+  for bit. `retrieve_catalog` pairs a catalogue with frames and reads them on
+  a thread pool; `write_catalog_bundles` writes one `retrieve()`-style
+  directory per target. For the 1,456 LSST DP1 QSOs (about 400k cutouts) one
+  CPU node extracts everything in about 15 minutes.
+- **In-memory bundles.** `bundle.bundle_hdulist` / `bundle_bytes` hand a
+  bundle on as the bytes `write_bundle` would write, for streaming into
+  photometry without touching the disk.
+
+### Fixed
+
+- **QR3 wide and deep returned the same files.** `query_tap` selected the
+  release by artifact path only, so `spherex_qr3` and `spherex_qr3_deep` both
+  returned every QR3 image and `find_overlapping` stacked the two lists; each
+  QR3 exposure was retrieved twice (QSO J0233+0653: 479 rows for 364 files).
+  It now joins `spherex.observation` and filters on its collection, and
+  `find_overlapping` keeps one row per L2 file (364 rows for 364 files).
+- **fsspec cutout window and origin.** The client-side crop took
+  `ceil(size / scale)` pixels through `Cutout2D`, while the cutout service
+  returns `round(size / scale)` per axis starting at `floor(c + 1 - n/2)`
+  (15 vs 16 px for the 92.25 arcsec reference box), and wrote `CRPIX1A/2A`
+  with the wrong sign, which mirrored the detector origin and could pick the
+  wrong PSF zones. Both now follow the service, including the wavelength
+  WCS reference pixels.
+- The index builder's header-scan workers start with `spawn` (forking a
+  multi-threaded process could deadlock).
+
 ## [0.3.1] — 2026-09-19
 
 ### Fixed
