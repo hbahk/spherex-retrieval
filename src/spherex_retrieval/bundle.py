@@ -98,6 +98,12 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    bundle_hdulist(bundle).writeto(path, overwrite=True)
+    return path
+
+
+def bundle_hdulist(bundle: Bundle) -> fits.HDUList:
+    """The bundle's MEF as an in-memory ``HDUList`` (the layout of :func:`write_bundle`)."""
     if bundle.cutout is None:
         raise ValueError("cannot write an empty bundle")
 
@@ -180,8 +186,21 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
         sapm_hdu.header["BUNIT"] = bundle.sapm.bunit
         hdus.append(sapm_hdu)
 
-    fits.HDUList(hdus).writeto(path, overwrite=True)
-    return path
+    return fits.HDUList(hdus)
+
+
+def bundle_bytes(bundle: Bundle) -> bytes:
+    """The bytes :func:`write_bundle` would write: a bundle handed on in memory.
+
+    Readers that take a path also take ``io.BytesIO(bundle_bytes(b))``, so a
+    photometry run can consume bundles straight from a frame read and see
+    exactly what it would read from disk.
+    """
+    import io
+
+    buf = io.BytesIO()
+    bundle_hdulist(bundle).writeto(buf)
+    return buf.getvalue()
 
 
 _EPSF_HEADER_KEYS = ("DETECTOR", "OVSMPX", "OVSMPY", "MAXIT", "SMOOTH", "JUNKCLN", "KEEPNAT",

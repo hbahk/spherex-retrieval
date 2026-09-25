@@ -1,9 +1,11 @@
 """Discovery queries: which SPHEREx L2 MEFs cover a given sky position?
 
-Two backends are exposed; the default ``astroquery`` backend uses IRSA's
-SIA2 service, and the ``pyvo`` backend issues an ADQL TAP query.
+Three backends are exposed; the default ``astroquery`` backend uses IRSA's
+SIA2 service, the ``pyvo`` backend issues an ADQL TAP query, and the
+``local`` backend searches the index of a local archive
+(:mod:`spherex_retrieval.index`), whose ``access_url`` is a local path.
 
-The two backends return an :class:`~astropy.table.Table` with a common set
+The backends return an :class:`~astropy.table.Table` with a common set
 of columns:
 
     obs_id              : str    — SPHEREx Observation ID
@@ -289,6 +291,69 @@ def _run_adql(adql: str, *, timeout: float = 120.0) -> Table:
 
 
 # --------------------------------------------------------------------------- #
+# Local archive backend
+# --------------------------------------------------------------------------- #
+
+def query_local(
+    coord: SkyCoord,
+    size: u.Quantity,
+    *,
+    index,
+    archive_root=None,
+    release: str | None = None,
+    bandpass: str | None = None,
+    margin_pix: float = 10.0,
+) -> Table:
+    """Frames of a local archive index whose footprint can hold the ``size`` box.
+
+    ``index`` is an index parquet path or its ``pyarrow.Table``
+    (:func:`spherex_retrieval.index.read_index`). ``archive_root`` and
+    ``release`` default to the values recorded when the index was built. The
+    footprint test is the generous one of
+    :func:`~spherex_retrieval.index.find_overlapping_many`; a frame the box
+    misses fails at the cutout step, as an IRSA cutout request would.
+    """
+    from pathlib import Path
+
+    from . import index as sidx
+
+    meta = {}
+    if isinstance(index, (str, Path)):
+        meta = sidx.index_metadata(index)
+        index = sidx.read_index(index)
+    else:
+        meta = sidx.index_metadata(index)
+    root = Path(archive_root or meta.get("archive_root") or "")
+    release = release or meta.get("release")
+    if not release:
+        raise ValueError("the index records no release; pass release= (e.g. 'qr2')")
+    ra = coord.icrs.ra.to_value(u.deg)
+    dec = coord.icrs.dec.to_value(u.deg)
+    pairs = sidx.find_overlapping_many([ra], [dec], size.to_value(u.arcsec), index,
+                                       margin_pix=margin_pix)
+    rows = index.take(pairs["frame"]) if len(pairs) else index.slice(0, 0)
+    det = np.asarray(rows.column("detector").to_numpy(), dtype=np.int32)
+    if bandpass is not None:
+        keep = det == _detector_from_bandpass(bandpass)
+        rows, det = rows.filter(keep), det[keep]
+    n = rows.num_rows
+    if n == 0:
+        return _empty_canonical_table()
+    return Table(
+        {
+            "access_url": np.asarray([str(root / p) for p in rows.column("path").to_pylist()],
+                                     dtype=str),
+            "cloud_uri": np.asarray([""] * n, dtype=str),
+            "obs_id": np.asarray(rows.column("obs_id").to_pylist(), dtype=str),
+            "bandpass": np.asarray([f"SPHEREx-D{d}" for d in det], dtype=str),
+            "detector": det,
+            "time_bounds_lower": np.asarray(rows.column("t_min").to_numpy(), dtype=np.float64),
+            "collection": np.asarray([f"spherex_{release}"] * n, dtype=str),
+        }
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Public dispatcher
 # --------------------------------------------------------------------------- #
 
@@ -296,17 +361,28 @@ def find_overlapping(
     coord: SkyCoord,
     size: u.Quantity,
     *,
-    backend: Literal["astroquery", "pyvo"] = "astroquery",
+    backend: Literal["astroquery", "pyvo", "local"] = "astroquery",
     collections: tuple[CollectionName, ...] = SUPPORTED_COLLECTIONS,
     bandpass: str | None = None,
     timeout: float = 120.0,
+    index=None,
+    archive_root=None,
 ) -> Table:
     """Find all L2 MEFs covering ``coord`` across the requested collections.
 
     Each L2 file appears once: a file listed by more than one collection keeps
     the row of the first collection in ``collections`` (fitting the same
     exposure twice would put two points per exposure in the spectrum).
+
+    ``backend="local"`` searches a local archive ``index`` instead (see
+    :func:`query_local`); ``collections`` does not apply there — the index is
+    one archive of one release.
     """
+    if backend == "local":
+        if index is None:
+            raise ValueError("backend='local' needs index= (an index parquet or table)")
+        return _drop_duplicate_files(query_local(coord, size, index=index,
+                                                 archive_root=archive_root, bandpass=bandpass))
     tables = []
     for col in collections:
         if backend == "astroquery":
