@@ -207,7 +207,11 @@ def query_tap(
 
     The point-in-footprint test uses ``p.poly``; the release is selected by
     the artifact path (``.../spherex/<release>/level2/...``), which is how
-    the ``qr3`` images are reachable while SIA2 does not list them. Returns
+    the ``qr3`` images are reachable while SIA2 does not list them, and the
+    collection by ``spherex.observation.collection`` — the path alone does not
+    tell a wide image from a deep one (``spherex_qr3`` and ``spherex_qr3_deep``
+    share ``/spherex/qr3/``), so without it each collection of a release would
+    return every image of the release. Returns
     raw L2 MEF URLs (not cutouts) so the cutout layer can choose the IRSA
     cutout service or S3 byte ranges; the S3 URI is derived from the IBE
     path, since the TAP artifact table carries no cloud column. The SPHEREx
@@ -232,7 +236,9 @@ def query_tap(
         p.provenance_version
     FROM spherex.artifact a
     JOIN spherex.plane p ON a.planeid = p.planeid
+    JOIN spherex.observation o ON o.obsid = p.obsid
     WHERE 1 = CONTAINS(POINT('ICRS', {ra}, {dec}), p.poly)
+        AND o.collection = '{collection}'
         AND a.uri LIKE '%/spherex/{release}/level2/%'
         {extra_filter}
     ORDER BY p.time_bounds_lower
@@ -295,7 +301,12 @@ def find_overlapping(
     bandpass: str | None = None,
     timeout: float = 120.0,
 ) -> Table:
-    """Find all L2 MEFs covering ``coord`` across the requested collections."""
+    """Find all L2 MEFs covering ``coord`` across the requested collections.
+
+    Each L2 file appears once: a file listed by more than one collection keeps
+    the row of the first collection in ``collections`` (fitting the same
+    exposure twice would put two points per exposure in the spectrum).
+    """
     tables = []
     for col in collections:
         if backend == "astroquery":
@@ -313,6 +324,20 @@ def find_overlapping(
     if not tables:
         return _empty_canonical_table()
     from astropy.table import vstack
-    combined = vstack(tables)
+    combined = _drop_duplicate_files(vstack(tables))
     combined.sort("time_bounds_lower")
     return combined
+
+
+def _drop_duplicate_files(table: Table) -> Table:
+    """Keep the first row of each L2 file, keyed by file name.
+
+    The name (``level2_<week>_<expo>_<dither>D<det>_spx_<procver>.fits``) is
+    the product identity: the same name is the same exposure, detector and
+    processing, whichever collection or host lists it.
+    """
+    names = [str(url).split("?", 1)[0].rsplit("/", 1)[-1] for url in table["access_url"]]
+    _, first = np.unique(names, return_index=True)
+    if len(first) == len(table):
+        return table
+    return table[np.sort(first)]
