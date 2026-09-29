@@ -1,0 +1,4 @@
+# Formatting-only commits, skipped by git blame:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# black
+2e53d3fc55e48816825953db566cdb2842f73bb5
