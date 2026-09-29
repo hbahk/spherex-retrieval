@@ -8,6 +8,7 @@ moves the PSF a fraction of an oversampled pixel away from the output array
 center -- and a forced-photometry caller, which anchors the kernel by its array
 center, reads that as an astrometric offset.
 """
+
 import numpy as np
 import pytest
 
@@ -20,9 +21,10 @@ N_OVER = 101
 def _kernels():
     yy, xx = np.indices((N_OVER, N_OVER), dtype=float)
     c = (N_OVER - 1) / 2.0
-    sym = np.exp(-((xx - c) ** 2 + (yy - c) ** 2) / (2 * 9.0 ** 2))
+    sym = np.exp(-((xx - c) ** 2 + (yy - c) ** 2) / (2 * 9.0**2))
     asym = sym + 0.35 * np.exp(
-        -(((xx - c) - 14) ** 2 + ((yy - c) - 9) ** 2) / (2 * 11.0 ** 2))
+        -(((xx - c) - 14) ** 2 + ((yy - c) - 9) ** 2) / (2 * 11.0**2)
+    )
     return sym, asym
 
 
@@ -62,7 +64,7 @@ def test_asymmetric_centroid_is_preserved():
     kernel, so the offset a caller measured was part resampling artifact.
     """
     _, asym = _kernels()
-    want = np.array(_centroid(asym)) / OVERSAMP        # native px
+    want = np.array(_centroid(asym)) / OVERSAMP  # native px
     got = np.array(_centroid(resample_psf_to_native(asym, normalize=False)))
     np.testing.assert_allclose(got, want, atol=1e-4)
 
@@ -96,7 +98,7 @@ def test_odd_oversamp_needs_no_half_pixel_weights():
     n = 99
     yy, xx = np.indices((n, n), dtype=float)
     c = (n - 1) / 2.0
-    sym = np.exp(-((xx - c) ** 2 + (yy - c) ** 2) / (2 * 9.0 ** 2))
+    sym = np.exp(-((xx - c) ** 2 + (yy - c) ** 2) / (2 * 9.0**2))
     out = resample_psf_to_native(sym, oversamp=9)
     assert out.shape[0] % 2 == 1
     np.testing.assert_allclose(out, out[::-1, ::-1], atol=1e-12)

@@ -39,7 +39,7 @@ PSF_FIX_TAG = "psffix1"
 
 # The QR2 lattice (x-fast plane order); kept for callers that import them.
 ZONE_GRID_X, ZONE_GRID_Y = np.meshgrid(np.arange(11), np.arange(11))
-ZONE_X_INDEX = ZONE_GRID_X.flatten() + 1   # 1..11
+ZONE_X_INDEX = ZONE_GRID_X.flatten() + 1  # 1..11
 ZONE_Y_INDEX = ZONE_GRID_Y.flatten() + 1
 
 #: Optional per-zone metadata columns carried from the R7 table into the subset lookup.
@@ -48,9 +48,9 @@ ZONE_EXTRA_COLUMNS = ("xwidth", "ywidth", "nstar", "neff")
 
 @dataclass
 class PSFZoneSubset:
-    cube: np.ndarray            # (n_zones, S, S): 101x101 (QR2) or 33x33 (R7)
-    lookup: Table               # zone_id, x, y, plane_idx (+ xwidth, ywidth, nstar, neff for R7)
-    zone_grid_xy: np.ndarray    # (n_zones, 2) integer 1-based lattice indices
+    cube: np.ndarray  # (n_zones, S, S): 101x101 (QR2) or 33x33 (R7)
+    lookup: Table  # zone_id, x, y, plane_idx (+ xwidth, ywidth, nstar, neff for R7)
+    zone_grid_xy: np.ndarray  # (n_zones, 2) integer 1-based lattice indices
 
 
 def zone_table_from_epsf(psf_table: np.ndarray) -> Table:
@@ -62,8 +62,12 @@ def zone_table_from_epsf(psf_table: np.ndarray) -> Table:
         "x": np.asarray(psf_table["XCENTER"], dtype=np.float64),
         "y": np.asarray(psf_table["YCENTER"], dtype=np.float64),
     }
-    for col, src in (("xwidth", "XWIDTH"), ("ywidth", "YWIDTH"), ("nstar", "NSTAR"),
-                     ("neff", "NEFF_MEAN")):
+    for col, src in (
+        ("xwidth", "XWIDTH"),
+        ("ywidth", "YWIDTH"),
+        ("nstar", "NSTAR"),
+        ("neff", "NEFF_MEAN"),
+    ):
         if src in psf_table.dtype.names:
             cols[col] = np.asarray(psf_table[src])
     return Table(cols)
@@ -103,7 +107,9 @@ def build_zone_table(psf_header: fits.Header) -> Table:
     )
 
 
-def cutout_to_orig(x_cut: float, y_cut: float, *, crpix1a: float, crpix2a: float) -> tuple[float, float]:
+def cutout_to_orig(
+    x_cut: float, y_cut: float, *, crpix1a: float, crpix2a: float
+) -> tuple[float, float]:
     """Map a 0-based cutout pixel coord to a 0-based original-detector pixel coord."""
     return (1.0 + (x_cut - crpix1a), 1.0 + (y_cut - crpix2a))
 
@@ -122,8 +128,8 @@ def subset_zones_for_cutout(
     psf_cube: np.ndarray,
     psf_header: fits.Header,
     *,
-    cutout_shape: tuple[int, int],     # (ny, nx)
-    pixel_origin: tuple[int, int],     # (xlo, ylo) in 0-based detector pixels
+    cutout_shape: tuple[int, int],  # (ny, nx)
+    pixel_origin: tuple[int, int],  # (xlo, ylo) in 0-based detector pixels
     zone_margin: int = ZONE_MARGIN_DEFAULT,
     zone_table: Table | None = None,
 ) -> PSFZoneSubset:
@@ -177,7 +183,9 @@ def subset_zones_for_cutout(
     )
     plane_idx = np.where(sel)[0]
     if plane_idx.size == 0:
-        plane_idx = np.array([table_index[nearest_zone((xlo + xhi) / 2, (ylo + yhi) / 2, table)]])
+        plane_idx = np.array(
+            [table_index[nearest_zone((xlo + xhi) / 2, (ylo + yhi) / 2, table)]]
+        )
 
     dtype = np.float64 if psf_cube.dtype == np.float64 else np.float32
     cube = np.asarray(psf_cube[plane_idx, :, :], dtype=dtype)
@@ -249,7 +257,9 @@ def fix_psf_header_if_needed(
         return psf_header, False
 
     bins_x, bins_y = _infer_bins_from_comments(psf_header, n_planes)
-    x_centers, y_centers, x_widths, y_widths = _collect_axis_values(psf_header, n_planes)
+    x_centers, y_centers, x_widths, y_widths = _collect_axis_values(
+        psf_header, n_planes
+    )
 
     out = psf_header.copy()
     for k0 in range(n_planes):
@@ -314,6 +324,7 @@ def _collect_axis_values(
 # --------------------------------------------------------------------------- #
 # Oversampled-PSF -> native-grid resampler (for forward-modeling)
 # --------------------------------------------------------------------------- #
+
 
 def resample_psf_to_native(
     psf_oversamp: np.ndarray,
@@ -383,8 +394,7 @@ def resample_psf_to_native(
     # bottom/right.  Either one displaces the PSF relative to the output array
     # center by a fraction of an oversampled pixel, which a forced-photometry
     # caller then reads as an astrometric offset.
-    out = _integrate_centered(shifted, oversamp=oversamp,
-                             output_size=output_size)
+    out = _integrate_centered(shifted, oversamp=oversamp, output_size=output_size)
 
     if normalize:
         s = out.sum()
@@ -420,8 +430,7 @@ def _integrate_centered(
     # weight of input pixel j (covering [j-0.5, j+0.5]) inside a window of
     # width `oversamp` centered at 0 -> overlap length, computed once
     off = np.arange(-int(np.ceil(half)), int(np.ceil(half)) + 1)
-    w = np.clip(np.minimum(off + 0.5, half) - np.maximum(off - 0.5, -half),
-                0.0, None)
+    w = np.clip(np.minimum(off + 0.5, half) - np.maximum(off - 0.5, -half), 0.0, None)
     c = (n - 1) / 2.0
     centers = c + oversamp * (np.arange(output_size) - output_size // 2)
     # nearest input index to each window center, plus the fractional remainder
@@ -433,8 +442,9 @@ def _integrate_centered(
         wgt = np.empty((output_size, off.size), dtype=np.float64)
         for m in range(output_size):
             d = off - frac[m]
-            wgt[m] = np.clip(np.minimum(d + 0.5, half)
-                             - np.maximum(d - 0.5, -half), 0.0, None)
+            wgt[m] = np.clip(
+                np.minimum(d + 0.5, half) - np.maximum(d - 0.5, -half), 0.0, None
+            )
     else:
         idx = base[:, None] + off[None, :]
         wgt = np.broadcast_to(w, (output_size, off.size))

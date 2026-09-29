@@ -117,11 +117,14 @@ def find_psf_product(
     )
 
     family = PSF_FAMILY[kind]
-    local = local_cal_product(family, detector, data_release=data_release, cal_token=cal_token)
+    local = local_cal_product(
+        family, detector, data_release=data_release, cal_token=cal_token
+    )
     if local is not None:
         return local[0], ""
     token = cal_token or latest_cal_token_via_listing(
-        family, data_release=data_release, detector=detector)
+        family, data_release=data_release, detector=detector
+    )
     if token is None:
         raise RuntimeError(
             f"could not list {family} cal products for D{detector} under {data_release} on IRSA"
@@ -132,10 +135,13 @@ def find_psf_product(
     )
 
 
-def find_average_psf_product(detector: int, *, data_release: str = "qr2",
-                             cal_token: str | None = None) -> tuple[str, str]:
+def find_average_psf_product(
+    detector: int, *, data_release: str = "qr2", cal_token: str | None = None
+) -> tuple[str, str]:
     """QR2 optical cube; see :func:`find_psf_product`."""
-    return find_psf_product("optical", detector, data_release=data_release, cal_token=cal_token)
+    return find_psf_product(
+        "optical", detector, data_release=data_release, cal_token=cal_token
+    )
 
 
 def load_average_psf_cube(
@@ -145,11 +151,12 @@ def load_average_psf_cube(
     fsspec_kwargs: dict | None = None,
 ) -> np.ndarray:
     """Read the ``PSF-DATA-CUBE`` of an ``average_psf`` cal product."""
-    with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
-                   fsspec_kwargs=fsspec_kwargs) as hdul:
+    with open_fits(
+        cal_target, mode="auto", cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+    ) as hdul:
         hdu = hdul["PSF-DATA-CUBE"] if "PSF-DATA-CUBE" in hdul else hdul[1]
         cube = np.array(hdu.data, copy=True)
-    cube.flags.writeable = False   # shared by every cutout of the detector
+    cube.flags.writeable = False  # shared by every cutout of the detector
     return cube
 
 
@@ -157,11 +164,17 @@ def epsf_library_from_hdu(hdu) -> EpsfLibrary:
     """Build an :class:`EpsfLibrary` from an ``EPSF`` binary-table HDU."""
     table = np.array(hdu.data, copy=True)
     n = len(table)
-    cube = np.ascontiguousarray(np.asarray(table["EPSF"], dtype=np.float64).reshape(n, 33, 33))
+    cube = np.ascontiguousarray(
+        np.asarray(table["EPSF"], dtype=np.float64).reshape(n, 33, 33)
+    )
     table.flags.writeable = False
     cube.flags.writeable = False
-    return EpsfLibrary(table=table, header=hdu.header.copy(), cube=cube,
-                       source_file=epsf_source_file(hdu.header))
+    return EpsfLibrary(
+        table=table,
+        header=hdu.header.copy(),
+        cube=cube,
+        source_file=epsf_source_file(hdu.header),
+    )
 
 
 def load_epsf_library(
@@ -171,17 +184,23 @@ def load_epsf_library(
     fsspec_kwargs: dict | None = None,
 ) -> EpsfLibrary:
     """Read the ``EPSF`` table of an ``epsf`` cal product."""
-    with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
-                   fsspec_kwargs=fsspec_kwargs) as hdul:
+    with open_fits(
+        cal_target, mode="auto", cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+    ) as hdul:
         hdu = hdul["EPSF"] if "EPSF" in hdul else hdul[1]
         return epsf_library_from_hdu(hdu)
 
 
-def load_psf_product(kind: PsfKind, cal_target: str, *, cache_dir=None,
-                     fsspec_kwargs: dict | None = None):
+def load_psf_product(
+    kind: PsfKind, cal_target: str, *, cache_dir=None, fsspec_kwargs: dict | None = None
+):
     if kind == "optical":
-        return load_average_psf_cube(cal_target, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs)
-    return load_epsf_library(cal_target, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs)
+        return load_average_psf_cube(
+            cal_target, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+        )
+    return load_epsf_library(
+        cal_target, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+    )
 
 
 def _cube_of_product(product) -> np.ndarray:
@@ -234,7 +253,9 @@ class SharedPsfRegistry:
         loader: Callable[[int], tuple[np.ndarray, str]] | None = None,
     ):
         if verify_every < 0:
-            raise ValueError("verify_every must be >= 0 (0 = check the first cutout only)")
+            raise ValueError(
+                "verify_every must be >= 0 (0 = check the first cutout only)"
+            )
         self.verify_every = verify_every
         self.cal_token = cal_token
         self.data_release = data_release
@@ -249,11 +270,17 @@ class SharedPsfRegistry:
 
     def _load_from_irsa(self, detector: int):
         http_url, s3_uri = find_psf_product(
-            self.kind, detector, data_release=self.data_release, cal_token=self.cal_token
+            self.kind,
+            detector,
+            data_release=self.data_release,
+            cal_token=self.cal_token,
         )
         target = s3_uri if (self.use_s3 and s3_uri) else http_url
         product = load_psf_product(
-            self.kind, target, cache_dir=self.cache_dir, fsspec_kwargs=self.fsspec_kwargs
+            self.kind,
+            target,
+            cache_dir=self.cache_dir,
+            fsspec_kwargs=self.fsspec_kwargs,
         )
         return product, target
 
@@ -281,7 +308,8 @@ class SharedPsfRegistry:
                     st.disabled = True
                     warnings.warn(
                         f"D{detector}: {PSF_FAMILY[self.kind]} cal product unavailable ({exc})",
-                        RuntimeWarning, stacklevel=2,
+                        RuntimeWarning,
+                        stacklevel=2,
                     )
             return st.cube
 
@@ -340,12 +368,15 @@ class SharedPsfRegistry:
                 warnings.warn(
                     f"D{detector}: L2 EPSF header names {got!r}, the shared library is "
                     f"{expected!r}; downloading the PSF with every cutout from here on",
-                    RuntimeWarning, stacklevel=2,
+                    RuntimeWarning,
+                    stacklevel=2,
                 )
                 return fetch_full(), "l2"
         return payload, self._source_tag(source)
 
-    def _check(self, st: _DetectorState, detector: int, l2_cube: np.ndarray, *, load: bool) -> None:
+    def _check(
+        self, st: _DetectorState, detector: int, l2_cube: np.ndarray, *, load: bool
+    ) -> None:
         if load:
             try:
                 st.cube, st.source = self._loader(detector)
@@ -354,7 +385,8 @@ class SharedPsfRegistry:
                 warnings.warn(
                     f"D{detector}: {PSF_FAMILY[self.kind]} cal product unavailable ({exc}); "
                     "downloading the PSF with every cutout",
-                    RuntimeWarning, stacklevel=3,
+                    RuntimeWarning,
+                    stacklevel=3,
                 )
                 return
         if cubes_identical(st.cube, l2_cube):
@@ -362,12 +394,16 @@ class SharedPsfRegistry:
             return
         was_trusted = st.verified
         st.disabled, st.verified, st.cube = True, False, None
-        msg = (f"D{detector}: L2 PSF cube differs from {st.source}; "
-               "downloading the PSF cube with every cutout from here on")
+        msg = (
+            f"D{detector}: L2 PSF cube differs from {st.source}; "
+            "downloading the PSF cube with every cutout from here on"
+        )
         if was_trusted:
-            msg += (f" — up to {max(self.verify_every, 1) - 1} D{detector} cutouts since the "
-                    "last passing check carry the cal cube (PSFSRC='cal:...') and "
-                    "should be re-retrieved with psf_source='l2'")
+            msg += (
+                f" — up to {max(self.verify_every, 1) - 1} D{detector} cutouts since the "
+                "last passing check carry the cal cube (PSFSRC='cal:...') and "
+                "should be re-retrieved with psf_source='l2'"
+            )
         warnings.warn(msg, RuntimeWarning, stacklevel=3)
 
     def is_disabled(self, detector: int) -> bool:
@@ -396,13 +432,20 @@ def get_registry(
         reg = _REGISTRIES.get(key)
         if reg is None:
             reg = _REGISTRIES[key] = SharedPsfRegistry(
-                verify_every=verify_every, cal_token=cal_token,
-                data_release=data_release, kind=kind, verify=verify,
-                cache_dir=cache_dir, use_s3=use_s3, fsspec_kwargs=fsspec_kwargs,
+                verify_every=verify_every,
+                cal_token=cal_token,
+                data_release=data_release,
+                kind=kind,
+                verify=verify,
+                cache_dir=cache_dir,
+                use_s3=use_s3,
+                fsspec_kwargs=fsspec_kwargs,
             )
         else:
             if verify_every < 0:
-                raise ValueError("verify_every must be >= 0 (0 = check the first cutout only)")
+                raise ValueError(
+                    "verify_every must be >= 0 (0 = check the first cutout only)"
+                )
             reg.verify_every = verify_every
             reg.cache_dir = cache_dir
             reg.fsspec_kwargs = fsspec_kwargs

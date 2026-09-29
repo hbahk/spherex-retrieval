@@ -35,11 +35,11 @@ FACTOR_RANGE = (0.5, 2.0)
 
 @dataclass
 class FluxCorrection:
-    data: np.ndarray      # per-pixel multiplicative factor, cropped to the cutout
+    data: np.ndarray  # per-pixel multiplicative factor, cropped to the cutout
     source_url: str
-    token: str            # cal token, e.g. cal-flxc-v1-2026-191
-    source_file: str      # the 'Calibration source file' HISTORY of the product, if any
-    n_replaced: int       # wild factors replaced by their row median
+    token: str  # cal token, e.g. cal-flxc-v1-2026-191
+    source_file: str  # the 'Calibration source file' HISTORY of the product, if any
+    n_replaced: int  # wild factors replaced by their row median
 
 
 def find_flux_correction_product(
@@ -56,19 +56,24 @@ def find_flux_correction_product(
         local_cal_product,
     )
 
-    local = local_cal_product("l3_flux_corrections", detector, data_release=data_release,
-                              cal_token=cal_token)
+    local = local_cal_product(
+        "l3_flux_corrections", detector, data_release=data_release, cal_token=cal_token
+    )
     if local is not None:
         return local[0], "", local[1]
     token = cal_token or latest_cal_token_via_listing(
-        "l3_flux_corrections", data_release=data_release, detector=detector)
+        "l3_flux_corrections", data_release=data_release, detector=detector
+    )
     if token is None:
         raise RuntimeError(
             f"could not list l3_flux_corrections cal products for D{detector} under "
-            f"{data_release} on IRSA")
-    return (cal_http_url("l3_flux_corrections", detector, token, data_release=data_release),
-            cal_s3_uri("l3_flux_corrections", detector, token, data_release=data_release),
-            token)
+            f"{data_release} on IRSA"
+        )
+    return (
+        cal_http_url("l3_flux_corrections", detector, token, data_release=data_release),
+        cal_s3_uri("l3_flux_corrections", detector, token, data_release=data_release),
+        token,
+    )
 
 
 def crop_flux_correction(
@@ -85,19 +90,22 @@ def crop_flux_correction(
     ny, nx = cutout_shape
     if xlo < 0 or ylo < 0:
         raise ValueError(
-            f"pixel_origin must be non-negative detector pixels, got {pixel_origin!r}")
+            f"pixel_origin must be non-negative detector pixels, got {pixel_origin!r}"
+        )
     # the row medians come from the full rows, not the crop: a narrow cutout
     # would otherwise take its median from a handful of pixels
     if not is_s3_uri(cal_target):
-        full, header = cached_hdu_data(cal_target, ("IMAGE",), 1, cache_dir=cache_dir,
-                                       fsspec_kwargs=fsspec_kwargs)
-        full_rows = np.array(full[ylo:ylo + ny, :], dtype=np.float64)
+        full, header = cached_hdu_data(
+            cal_target, ("IMAGE",), 1, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+        )
+        full_rows = np.array(full[ylo : ylo + ny, :], dtype=np.float64)
         history = header.get("HISTORY", [])
     else:
-        with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
-                       fsspec_kwargs=fsspec_kwargs) as hdul:
+        with open_fits(
+            cal_target, mode="auto", cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+        ) as hdul:
             hdu = hdul["IMAGE"] if "IMAGE" in hdul else hdul[1]
-            full_rows = np.asarray(hdu.section[ylo:ylo + ny, :], dtype=np.float64)
+            full_rows = np.asarray(hdu.section[ylo : ylo + ny, :], dtype=np.float64)
             history = list(hdu.header.get("HISTORY", []))
     source_file = ""
     for card in history:
@@ -107,19 +115,30 @@ def crop_flux_correction(
     bad_full = ~np.isfinite(full_rows) | (full_rows < lo) | (full_rows > hi)
     row_med = np.nanmedian(np.where(bad_full, np.nan, full_rows), axis=1)
     row_med = np.where(np.isfinite(row_med), row_med, 1.0)
-    data = full_rows[:, xlo:xlo + nx].copy()
-    bad = bad_full[:, xlo:xlo + nx]
+    data = full_rows[:, xlo : xlo + nx].copy()
+    bad = bad_full[:, xlo : xlo + nx]
     data[bad] = np.broadcast_to(row_med[:, None], data.shape)[bad]
-    return FluxCorrection(data=data.astype(np.float32), source_url=cal_target, token=token,
-                          source_file=source_file, n_replaced=int(bad.sum()))
+    return FluxCorrection(
+        data=data.astype(np.float32),
+        source_url=cal_target,
+        token=token,
+        source_file=source_file,
+        n_replaced=int(bad.sum()),
+    )
 
 
 def apply_flux_correction(cutout, corr: FluxCorrection) -> None:
     """Multiply the cutout's IMAGE by the factor and its VARIANCE by its square, in place."""
     f = np.asarray(corr.data, dtype=np.float64)
     if f.shape != cutout.image.shape:
-        raise ValueError(f"flux-correction shape {f.shape} != image shape {cutout.image.shape}")
+        raise ValueError(
+            f"flux-correction shape {f.shape} != image shape {cutout.image.shape}"
+        )
     # keep the arrays' dtype (and byte order) so the bundle is the same apart
     # from the values
-    cutout.image = (np.asarray(cutout.image, dtype=np.float64) * f).astype(cutout.image.dtype)
-    cutout.variance = (np.asarray(cutout.variance, dtype=np.float64) * f ** 2).astype(cutout.variance.dtype)
+    cutout.image = (np.asarray(cutout.image, dtype=np.float64) * f).astype(
+        cutout.image.dtype
+    )
+    cutout.variance = (np.asarray(cutout.variance, dtype=np.float64) * f**2).astype(
+        cutout.variance.dtype
+    )

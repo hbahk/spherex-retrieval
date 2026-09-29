@@ -26,14 +26,15 @@ from .io import cached_hdu_data, is_s3_uri, open_fits
 
 @dataclass
 class SolidAnglePixelMap:
-    data: np.ndarray   # arcsec^2 per pixel
-    bunit: str         # always "arcsec2" in QR-2
+    data: np.ndarray  # arcsec^2 per pixel
+    bunit: str  # always "arcsec2" in QR-2
     source_url: str
 
 
 # --------------------------------------------------------------------------- #
 # SAPM cal-product discovery
 # --------------------------------------------------------------------------- #
+
 
 def find_sapm_product(
     detector: int,
@@ -68,6 +69,7 @@ def find_sapm_product(
 # Cropping the SAPM to the cutout
 # --------------------------------------------------------------------------- #
 
+
 def crop_sapm(
     cal_target: str,
     *,
@@ -86,16 +88,18 @@ def crop_sapm(
             f"pixel_origin must be non-negative detector pixels, got {pixel_origin!r}"
         )
     if not is_s3_uri(cal_target):
-        full, header = cached_hdu_data(cal_target, ("IMAGE",), 1, cache_dir=cache_dir,
-                                       fsspec_kwargs=fsspec_kwargs)
-        data = np.array(full[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32)
+        full, header = cached_hdu_data(
+            cal_target, ("IMAGE",), 1, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+        )
+        data = np.array(full[ylo : ylo + ny, xlo : xlo + nx], dtype=np.float32)
         bunit = str(header.get("BUNIT", "arcsec2"))
         return SolidAnglePixelMap(data=data, bunit=bunit, source_url=cal_target)
-    with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
-                   fsspec_kwargs=fsspec_kwargs) as hdul:
+    with open_fits(
+        cal_target, mode="auto", cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+    ) as hdul:
         sapm_hdu = hdul["IMAGE"] if "IMAGE" in hdul else hdul[1]
         data = np.asarray(
-            sapm_hdu.section[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32
+            sapm_hdu.section[ylo : ylo + ny, xlo : xlo + nx], dtype=np.float32
         )
         bunit = str(sapm_hdu.header.get("BUNIT", "arcsec2"))
     return SolidAnglePixelMap(data=data, bunit=bunit, source_url=cal_target)

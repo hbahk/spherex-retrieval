@@ -45,13 +45,25 @@ def _empty_canonical_table() -> Table:
         }
     )
 
-CollectionName = Literal["spherex_qr2", "spherex_qr2_deep", "spherex_qr2_cal",
-                         "spherex_qr3", "spherex_qr3_deep", "spherex_qr3_cal"]
+
+CollectionName = Literal[
+    "spherex_qr2",
+    "spherex_qr2_deep",
+    "spherex_qr2_cal",
+    "spherex_qr3",
+    "spherex_qr3_deep",
+    "spherex_qr3_cal",
+]
 #: Default search order: every quick release, oldest first. QR2 files carry the
 #: optical PSF cube, QR3 (pipeline R7) files the effective PSF (``EPSF``); the
 #: bundle records which (``PSFKIND``), so mixing releases in one retrieval is
 #: fine for the retrieval — the photometry layer groups by kind.
-SUPPORTED_COLLECTIONS = ("spherex_qr2", "spherex_qr2_deep", "spherex_qr3", "spherex_qr3_deep")
+SUPPORTED_COLLECTIONS = (
+    "spherex_qr2",
+    "spherex_qr2_deep",
+    "spherex_qr3",
+    "spherex_qr3_deep",
+)
 #: Releases that IRSA's SIA2/CAOM service does not list (2026-09-18: QR3 images
 #: are in the ``spherex.plane``/``spherex.artifact`` TAP tables but not in
 #: CAOM); their discovery falls back to the TAP backend automatically.
@@ -77,13 +89,16 @@ def release_of_url(url: str) -> str | None:
 
 def observation_id_from_filename(name: str) -> str:
     """``level2_2026W32_1A_0001_1D1_spx_l2b-v27-2026-223.fits -> 2026W32_1A_0001_1``."""
-    m = re.search(r"level2_(\d{4}W\d{2}_\d[A-Z]_\d{4}_\d)D\d_", str(name).rsplit("/", 1)[-1])
+    m = re.search(
+        r"level2_(\d{4}W\d{2}_\d[A-Z]_\d{4}_\d)D\d_", str(name).rsplit("/", 1)[-1]
+    )
     return m.group(1) if m else ""
 
 
 # --------------------------------------------------------------------------- #
 # Astroquery / SIA2 backend (default)
 # --------------------------------------------------------------------------- #
+
 
 def query_sia2(
     coord: SkyCoord,
@@ -163,6 +178,7 @@ def _extract_cloud_uri(row) -> str:
     text = str(val)
     # cloud_access is a JSON-ish blob; pull the s3 uri if present.
     import json
+
     try:
         info = json.loads(text)
     except Exception:
@@ -226,9 +242,7 @@ def query_tap(
     release = release_of_collection(collection)
     ra = coord.icrs.ra.to_value(u.deg)
     dec = coord.icrs.dec.to_value(u.deg)
-    extra_filter = (
-        f"AND p.energy_bandpassname = '{bandpass}'" if bandpass else ""
-    )
+    extra_filter = f"AND p.energy_bandpassname = '{bandpass}'" if bandpass else ""
     adql = f"""
     SELECT
         a.uri AS access_path,
@@ -255,18 +269,27 @@ def query_tap(
     return Table(
         {
             "access_url": np.asarray(
-                [f"https://irsa.ipac.caltech.edu/{p}" for p in paths], dtype=str),
+                [f"https://irsa.ipac.caltech.edu/{p}" for p in paths], dtype=str
+            ),
             "cloud_uri": np.asarray(
-                [f"s3://nasa-irsa-spherex/{p.split('ibe/data/spherex/', 1)[1]}"
-                 if "ibe/data/spherex/" in p else "" for p in paths], dtype=str),
-            "obs_id": np.asarray([observation_id_from_filename(p) for p in paths], dtype=str),
+                [
+                    (
+                        f"s3://nasa-irsa-spherex/{p.split('ibe/data/spherex/', 1)[1]}"
+                        if "ibe/data/spherex/" in p
+                        else ""
+                    )
+                    for p in paths
+                ],
+                dtype=str,
+            ),
+            "obs_id": np.asarray(
+                [observation_id_from_filename(p) for p in paths], dtype=str
+            ),
             "bandpass": np.asarray(bandpasses, dtype=str),
             "detector": np.asarray(
                 [_detector_from_bandpass(s) for s in bandpasses], dtype=np.int32
             ),
-            "time_bounds_lower": np.asarray(
-                raw["time_bounds_lower"], dtype=np.float64
-            ),
+            "time_bounds_lower": np.asarray(raw["time_bounds_lower"], dtype=np.float64),
             "collection": np.asarray([collection] * n, dtype=str),
         }
     )
@@ -284,8 +307,10 @@ def _run_adql(adql: str, *, timeout: float = 120.0) -> Table:
     import io
 
     import requests
-    resp = requests.get(f"{TAP_ENDPOINT}/sync", params={"QUERY": adql, "FORMAT": "csv"},
-                        timeout=timeout)
+
+    resp = requests.get(
+        f"{TAP_ENDPOINT}/sync", params={"QUERY": adql, "FORMAT": "csv"}, timeout=timeout
+    )
     resp.raise_for_status()
     return Table.read(io.StringIO(resp.text), format="ascii.csv")
 
@@ -293,6 +318,7 @@ def _run_adql(adql: str, *, timeout: float = 120.0) -> Table:
 # --------------------------------------------------------------------------- #
 # Local archive backend
 # --------------------------------------------------------------------------- #
+
 
 def query_local(
     coord: SkyCoord,
@@ -329,8 +355,9 @@ def query_local(
         raise ValueError("the index records no release; pass release= (e.g. 'qr2')")
     ra = coord.icrs.ra.to_value(u.deg)
     dec = coord.icrs.dec.to_value(u.deg)
-    pairs = sidx.find_overlapping_many([ra], [dec], size.to_value(u.arcsec), index,
-                                       margin_pix=margin_pix)
+    pairs = sidx.find_overlapping_many(
+        [ra], [dec], size.to_value(u.arcsec), index, margin_pix=margin_pix
+    )
     rows = index.take(pairs["frame"]) if len(pairs) else index.slice(0, 0)
     det = np.asarray(rows.column("detector").to_numpy(), dtype=np.int32)
     if bandpass is not None:
@@ -341,13 +368,16 @@ def query_local(
         return _empty_canonical_table()
     return Table(
         {
-            "access_url": np.asarray([str(root / p) for p in rows.column("path").to_pylist()],
-                                     dtype=str),
+            "access_url": np.asarray(
+                [str(root / p) for p in rows.column("path").to_pylist()], dtype=str
+            ),
             "cloud_uri": np.asarray([""] * n, dtype=str),
             "obs_id": np.asarray(rows.column("obs_id").to_pylist(), dtype=str),
             "bandpass": np.asarray([f"SPHEREx-D{d}" for d in det], dtype=str),
             "detector": det,
-            "time_bounds_lower": np.asarray(rows.column("t_min").to_numpy(), dtype=np.float64),
+            "time_bounds_lower": np.asarray(
+                rows.column("t_min").to_numpy(), dtype=np.float64
+            ),
             "collection": np.asarray([f"spherex_{release}"] * n, dtype=str),
         }
     )
@@ -356,6 +386,7 @@ def query_local(
 # --------------------------------------------------------------------------- #
 # Public dispatcher
 # --------------------------------------------------------------------------- #
+
 
 def find_overlapping(
     coord: SkyCoord,
@@ -382,19 +413,32 @@ def find_overlapping(
     if backend == "local":
         if index is None:
             raise ValueError("backend='local' needs index= (an index parquet or table)")
-        return _drop_duplicate_files(query_local(coord, size, index=index,
-                                                 archive_root=archive_root, release=release,
-                                                 bandpass=bandpass))
+        return _drop_duplicate_files(
+            query_local(
+                coord,
+                size,
+                index=index,
+                archive_root=archive_root,
+                release=release,
+                bandpass=bandpass,
+            )
+        )
     tables = []
     for col in collections:
         if backend == "astroquery":
             if release_of_collection(col) in SIA2_MISSING_RELEASES:
                 # not in CAOM/SIA2 yet: the TAP tables have the footprints
-                t = query_tap(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
+                t = query_tap(
+                    coord, size, collection=col, bandpass=bandpass, timeout=timeout
+                )
             else:
-                t = query_sia2(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
+                t = query_sia2(
+                    coord, size, collection=col, bandpass=bandpass, timeout=timeout
+                )
         elif backend == "pyvo":
-            t = query_tap(coord, size, collection=col, bandpass=bandpass, timeout=timeout)
+            t = query_tap(
+                coord, size, collection=col, bandpass=bandpass, timeout=timeout
+            )
         else:
             raise ValueError(f"unknown query backend: {backend!r}")
         if len(t) > 0:
@@ -402,6 +446,7 @@ def find_overlapping(
     if not tables:
         return _empty_canonical_table()
     from astropy.table import vstack
+
     combined = _drop_duplicate_files(vstack(tables))
     combined.sort("time_bounds_lower")
     return combined
@@ -414,7 +459,9 @@ def _drop_duplicate_files(table: Table) -> Table:
     the product identity: the same name is the same exposure, detector and
     processing, whichever collection or host lists it.
     """
-    names = [str(url).split("?", 1)[0].rsplit("/", 1)[-1] for url in table["access_url"]]
+    names = [
+        str(url).split("?", 1)[0].rsplit("/", 1)[-1] for url in table["access_url"]
+    ]
     _, first = np.unique(names, return_index=True)
     if len(first) == len(table):
         return table

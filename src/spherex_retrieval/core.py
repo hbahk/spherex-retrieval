@@ -190,7 +190,10 @@ def retrieve(
     """
     # Tutorials warn that SPHEREx remote reads can exceed astropy's default.
     from astropy.utils.data import conf as _astropy_data_conf
-    _astropy_data_conf.remote_timeout = max(remote_timeout, _astropy_data_conf.remote_timeout)
+
+    _astropy_data_conf.remote_timeout = max(
+        remote_timeout, _astropy_data_conf.remote_timeout
+    )
 
     if output_dir is None:
         output_dir = default_output_dir(coord)
@@ -203,17 +206,25 @@ def retrieve(
         raise ValueError(f"unknown psf_source: {psf_source!r}")
 
     def _registry_for(release: str) -> SharedPsfRegistry | None:
-        return psf_registry_for(release, psf_source=psf_source, psf_verify_every=psf_verify_every,
-                                psf_cal_token=psf_cal_token, epsf_release=epsf_release,
-                                cache_dir=cache_dir, use_s3=(cutout_backend == "fsspec"),
-                                fsspec_kwargs=fsspec_kwargs)
+        return psf_registry_for(
+            release,
+            psf_source=psf_source,
+            psf_verify_every=psf_verify_every,
+            psf_cal_token=psf_cal_token,
+            epsf_release=epsf_release,
+            cache_dir=cache_dir,
+            use_s3=(cutout_backend == "fsspec"),
+            fsspec_kwargs=fsspec_kwargs,
+        )
 
     if cal_roots is not None:
         from .cal_index import set_local_cal_roots
+
         set_local_cal_roots(cal_roots)
 
     overlap = find_overlapping(
-        coord, size,
+        coord,
+        size,
         backend=query_backend,
         collections=tuple(collections),
         bandpass=bandpass,
@@ -267,12 +278,17 @@ def retrieve(
     return bundles, output_dir
 
 
-def psf_registry_for(release: str, *, psf_source: PsfSource = "epsf-cal",
-                     psf_verify_every: int = PSF_VERIFY_EVERY_DEFAULT,
-                     psf_cal_token: str | None = None,
-                     epsf_release: str = EPSF_RELEASE_DEFAULT, cache_dir=None,
-                     use_s3: bool = False,
-                     fsspec_kwargs: dict | None = None) -> SharedPsfRegistry | None:
+def psf_registry_for(
+    release: str,
+    *,
+    psf_source: PsfSource = "epsf-cal",
+    psf_verify_every: int = PSF_VERIFY_EVERY_DEFAULT,
+    psf_cal_token: str | None = None,
+    epsf_release: str = EPSF_RELEASE_DEFAULT,
+    cache_dir=None,
+    use_s3: bool = False,
+    fsspec_kwargs: dict | None = None,
+) -> SharedPsfRegistry | None:
     """The shared-PSF registry for an image of ``release`` (``None``: ``psf_source="l2"``)."""
     if psf_source not in ("cal", "l2", "epsf-cal"):
         raise ValueError(f"unknown psf_source: {psf_source!r}")
@@ -281,13 +297,21 @@ def psf_registry_for(release: str, *, psf_source: PsfSource = "epsf-cal",
     if psf_source == "epsf-cal" and psf_kind_of_release(release) == "optical":
         # a QR2 image: attach the R7 library (no check against the file possible)
         return get_registry(
-            verify_every=psf_verify_every, cal_token=psf_cal_token,
-            data_release=epsf_release, kind="effective", verify=False,
-            cache_dir=cache_dir, use_s3=use_s3, fsspec_kwargs=fsspec_kwargs,
+            verify_every=psf_verify_every,
+            cal_token=psf_cal_token,
+            data_release=epsf_release,
+            kind="effective",
+            verify=False,
+            cache_dir=cache_dir,
+            use_s3=use_s3,
+            fsspec_kwargs=fsspec_kwargs,
         )
     return get_registry(
-        verify_every=psf_verify_every, cal_token=psf_cal_token,
-        data_release=release, cache_dir=cache_dir, use_s3=use_s3,
+        verify_every=psf_verify_every,
+        cal_token=psf_cal_token,
+        data_release=release,
+        cache_dir=cache_dir,
+        use_s3=use_s3,
         fsspec_kwargs=fsspec_kwargs,
     )
 
@@ -353,12 +377,21 @@ def _retrieve_one(
         return bundle
 
     return complete_bundle(
-        bundle, coord=coord, cutout_backend=cutout_backend,
-        include_wavelength=include_wavelength, include_sapm=include_sapm,
-        sapm_cal_token=sapm_cal_token, subset_psf=subset_psf, zone_margin=zone_margin,
-        data_release=data_release, calibration_release=calibration_release,
-        gain_correction=gain_correction, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs,
-        query_backend=query_backend)
+        bundle,
+        coord=coord,
+        cutout_backend=cutout_backend,
+        include_wavelength=include_wavelength,
+        include_sapm=include_sapm,
+        sapm_cal_token=sapm_cal_token,
+        subset_psf=subset_psf,
+        zone_margin=zone_margin,
+        data_release=data_release,
+        calibration_release=calibration_release,
+        gain_correction=gain_correction,
+        cache_dir=cache_dir,
+        fsspec_kwargs=fsspec_kwargs,
+        query_backend=query_backend,
+    )
 
 
 def complete_bundle(
@@ -385,23 +418,35 @@ def complete_bundle(
     bundles agree bit for bit whichever path cut the pixels.
     """
     calibration_release = calibration_release or data_release
-    if (gain_correction and bundle.cutout is not None
-            and psf_kind_of_release(data_release) == "optical"
-            and psf_kind_of_release(calibration_release) == "effective"):
+    if (
+        gain_correction
+        and bundle.cutout is not None
+        and psf_kind_of_release(data_release) == "optical"
+        and psf_kind_of_release(calibration_release) == "effective"
+    ):
         # a pre-R7 image: bring its pixels to the R7 absolute gain
         try:
             http, s3, token = find_flux_correction_product(
-                bundle.detector, data_release=calibration_release)
+                bundle.detector, data_release=calibration_release
+            )
             target = s3 if (cutout_backend == "fsspec" and s3) else http
             corr = crop_flux_correction(
-                target, pixel_origin=bundle.cutout.pixel_origin,
-                cutout_shape=bundle.cutout.image.shape, token=token,
-                cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs)
+                target,
+                pixel_origin=bundle.cutout.pixel_origin,
+                cutout_shape=bundle.cutout.image.shape,
+                token=token,
+                cache_dir=cache_dir,
+                fsspec_kwargs=fsspec_kwargs,
+            )
             apply_flux_correction(bundle.cutout, corr)
             bundle.extras["flux_correction"] = {
-                "token": token, "source_file": corr.source_file,
-                "median": float(np.median(corr.data)), "n_replaced": corr.n_replaced}
-        except Exception as exc:  # noqa: BLE001 - a cal-product hiccup must not lose the cutout
+                "token": token,
+                "source_file": corr.source_file,
+                "median": float(np.median(corr.data)),
+                "n_replaced": corr.n_replaced,
+            }
+        # a cal-product hiccup must not lose the cutout
+        except Exception as exc:  # noqa: BLE001
             note = f"flux correction failed: {exc}"
             bundle.message = (bundle.message + "; " + note) if bundle.message else note
 
@@ -424,8 +469,11 @@ def complete_bundle(
 
     if subset_psf and bundle.cutout is not None:
         try:
-            zone_table = (zone_table_from_epsf(bundle.cutout.psf_table)
-                          if bundle.cutout.psf_table is not None else None)
+            zone_table = (
+                zone_table_from_epsf(bundle.cutout.psf_table)
+                if bundle.cutout.psf_table is not None
+                else None
+            )
             bundle.psf_subset = subset_zones_for_cutout(
                 bundle.cutout.psf_cube,
                 bundle.cutout.psf_header,
@@ -440,7 +488,9 @@ def complete_bundle(
     if include_wavelength and bundle.cutout is not None:
         try:
             cal_http, cal_s3 = find_cal_product(
-                bundle.detector, backend=query_backend, coord=coord,
+                bundle.detector,
+                backend=query_backend,
+                coord=coord,
                 data_release=calibration_release,
             )
             cal_target = cal_s3 if (cutout_backend == "fsspec" and cal_s3) else cal_http

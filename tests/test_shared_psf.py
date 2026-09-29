@@ -6,6 +6,7 @@ pieces that make skipping it safe: the header scanner that decides where to
 hang up, the streaming fetch that actually hangs up, and the registry that
 samples full downloads to check the cal cube against the L2 one.
 """
+
 import io
 import threading
 import warnings
@@ -19,8 +20,11 @@ from astropy.table import Table
 
 from spherex_retrieval import io as sio
 from spherex_retrieval.bundle import Bundle, write_bundle
-from spherex_retrieval.cutout import (_payload_from_irsa_hdul, _PsfHeaderScanner,
-                                      fetch_irsa_cutout)
+from spherex_retrieval.cutout import (
+    _payload_from_irsa_hdul,
+    _PsfHeaderScanner,
+    fetch_irsa_cutout,
+)
 from spherex_retrieval.psf_shared import SharedPsfRegistry
 
 RNG = np.random.default_rng(0)
@@ -33,19 +37,34 @@ def _mef_bytes(cube=CUBE, *, name_psf=True) -> bytes:
     img_hdr["DETECTOR"] = 4
     img_hdr["CRPIX1A"] = -1839
     img_hdr["CRPIX2A"] = -200
-    for k, v in (("CTYPE1", "RA---TAN"), ("CTYPE2", "DEC--TAN"), ("CRVAL1", 10.0), ("CRVAL2", 20.0),
-                 ("CRPIX1", 2.0), ("CRPIX2", 8.0), ("CDELT1", -6.2 / 3600), ("CDELT2", 6.2 / 3600)):
+    for k, v in (
+        ("CTYPE1", "RA---TAN"),
+        ("CTYPE2", "DEC--TAN"),
+        ("CRVAL1", 10.0),
+        ("CRVAL2", 20.0),
+        ("CRPIX1", 2.0),
+        ("CRPIX2", 8.0),
+        ("CDELT1", -6.2 / 3600),
+        ("CDELT2", 6.2 / 3600),
+    ):
         img_hdr[k] = v
     primary = fits.PrimaryHDU()
     primary.header["VERSION"] = "6.5.7"
     psf = fits.ImageHDU(cube, name="PSF" if name_psf else None)
     psf.header["OVERSAMP"] = 10
-    for i in range(1, 122):          # a multi-block header, like the real one
+    for i in range(1, 122):  # a multi-block header, like the real one
         psf.header[f"XCTR_{i}"] = float(i)
         psf.header[f"YCTR_{i}"] = float(i)
-    hdus = [primary, fits.ImageHDU(RNG.normal(size=(15, 3)).astype(">f4"), header=img_hdr, name="IMAGE")]
-    hdus += [fits.ImageHDU(RNG.normal(size=(15, 3)).astype(">f4"), name=n)
-             for n in ("FLAGS", "VARIANCE", "ZODI")]
+    hdus = [
+        primary,
+        fits.ImageHDU(
+            RNG.normal(size=(15, 3)).astype(">f4"), header=img_hdr, name="IMAGE"
+        ),
+    ]
+    hdus += [
+        fits.ImageHDU(RNG.normal(size=(15, 3)).astype(">f4"), name=n)
+        for n in ("FLAGS", "VARIANCE", "ZODI")
+    ]
     hdus += [psf, fits.BinTableHDU(Table({"x": [1.0, 2.0]}), name="WCS-WAVE")]
     buf = io.BytesIO()
     fits.HDUList(hdus).writeto(buf)
@@ -62,12 +81,12 @@ def test_scanner_stops_at_psf_data_start(chunk):
     body = _mef_bytes()
     scanner, buf, stop = _PsfHeaderScanner(), bytearray(), None
     for i in range(0, len(body), chunk):
-        buf += body[i:i + chunk]
+        buf += body[i : i + chunk]
         stop = scanner(buf)
         if stop is not None:
             break
     assert stop == _psf_data_offset(body)
-    assert len(buf) < stop + chunk          # never asked for more than one chunk past it
+    assert len(buf) < stop + chunk  # never asked for more than one chunk past it
     hdr = fits.Header.fromstring(bytes(buf[slice(*scanner.psf_span)]).decode("ascii"))
     assert hdr["EXTNAME"] == "PSF" and hdr["XCTR_121"] == 121.0
 
@@ -79,7 +98,9 @@ def test_scanner_falls_back_to_hdu_index_when_extname_missing():
 
 def test_scanner_never_fires_without_a_psf_hdu():
     buf = io.BytesIO()
-    fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(np.zeros((3, 3)), name="IMAGE")]).writeto(buf)
+    fits.HDUList(
+        [fits.PrimaryHDU(), fits.ImageHDU(np.zeros((3, 3)), name="IMAGE")]
+    ).writeto(buf)
     assert _PsfHeaderScanner()(bytearray(buf.getvalue())) is None
 
 
@@ -101,7 +122,7 @@ class _FakeResponse:
     def iter_content(self, chunk_size):
         for i in range(0, len(self._body), chunk_size):
             self._log["sent"] = i + chunk_size
-            yield self._body[i:i + chunk_size]
+            yield self._body[i : i + chunk_size]
 
 
 @pytest.fixture
@@ -122,7 +143,9 @@ def fake_irsa(monkeypatch, tmp_path):
 
 def test_http_fetch_until_hangs_up_early(fake_irsa):
     log, body = fake_irsa
-    got, stopped = sio.http_fetch_until("http://x", _PsfHeaderScanner(), chunk_size=4096)
+    got, stopped = sio.http_fetch_until(
+        "http://x", _PsfHeaderScanner(), chunk_size=4096
+    )
     off = _psf_data_offset(body)
     assert stopped and got == body[:off]
     assert log["closed"] and log["sent"] < off + 4096 < len(body)
@@ -137,7 +160,9 @@ def test_http_fetch_until_returns_whole_body_if_never_stopped(fake_irsa):
 def _registry(cube=CUBE, **kw):
     shared = np.array(cube, copy=True)
     shared.flags.writeable = False
-    return SharedPsfRegistry(loader=lambda det: (shared, f"average_psf_D{det}_spx_cal-psf-v5.fits"), **kw)
+    return SharedPsfRegistry(
+        loader=lambda det: (shared, f"average_psf_D{det}_spx_cal-psf-v5.fits"), **kw
+    )
 
 
 URL = "https://irsa/level2_2025W22_2B_0161_1D4_spx_l2b-v20-2025-251.fits"
@@ -154,8 +179,9 @@ def test_light_payload_matches_full_payload(fake_irsa):
     assert first.psf_source == "l2" and log["sent"] >= len(body)
 
     # a different position -> a different cutout URL, so the disk cache is not hit
-    second = fetch_irsa_cutout(URL, SkyCoord(10.1, 20.0, unit="deg"), 1 * u.arcmin,
-                               psf_registry=reg)
+    second = fetch_irsa_cutout(
+        URL, SkyCoord(10.1, 20.0, unit="deg"), 1 * u.arcmin, psf_registry=reg
+    )
     assert second.psf_source == "cal:average_psf_D4_spx_cal-psf-v5.fits"
     # hung up within one 16 KiB chunk of the PSF data start, short of the body's end
     assert log["sent"] < _psf_data_offset(body) + (1 << 14) < len(body)
@@ -179,15 +205,30 @@ def _drive(reg, n, *, l2_cube=CUBE, det=4):
         calls.append("light")
         return {"cube": cube}
 
-    tags = [reg.fetch(det, fetch_full=full, fetch_light=light, cube_of=lambda p: p["cube"])[1]
-            for _ in range(n)]
+    tags = [
+        reg.fetch(det, fetch_full=full, fetch_light=light, cube_of=lambda p: p["cube"])[
+            1
+        ]
+        for _ in range(n)
+    ]
     return calls, tags
 
 
 def test_registry_checks_first_cutout_then_samples():
     calls, tags = _drive(_registry(verify_every=4), 10)
     #        first   1        2        3        4th     5 ...
-    assert calls == ["full", "light", "light", "light", "full", "light", "light", "light", "full", "light"]
+    assert calls == [
+        "full",
+        "light",
+        "light",
+        "light",
+        "full",
+        "light",
+        "light",
+        "light",
+        "full",
+        "light",
+    ]
     assert [t == "l2" for t in tags] == [c == "full" for c in calls]
 
 
@@ -208,7 +249,7 @@ def test_sampled_mismatch_disables_sharing_and_names_the_exposure():
     reg = _registry(verify_every=3)
     assert _drive(reg, 3)[0] == ["full", "light", "light"]
     with pytest.warns(RuntimeWarning, match="re-retrieved"):
-        calls, _ = _drive(reg, 3, l2_cube=CUBE + 1)     # 3rd counted fetch is the sample
+        calls, _ = _drive(reg, 3, l2_cube=CUBE + 1)  # 3rd counted fetch is the sample
     assert calls == ["full", "full", "full"]
 
 
@@ -217,7 +258,10 @@ def test_nan_cubes_compare_equal():
     cube[0, 0, 0] = np.nan
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assert _drive(_registry(cube, verify_every=0), 2, l2_cube=cube.copy())[0] == ["full", "light"]
+        assert _drive(_registry(cube, verify_every=0), 2, l2_cube=cube.copy())[0] == [
+            "full",
+            "light",
+        ]
 
 
 def test_unavailable_cal_product_falls_back_to_full_downloads():
@@ -255,8 +299,14 @@ def test_concurrent_first_use_checks_once():
             calls.append("light")
         return {"cube": cube}
 
-    threads = [threading.Thread(target=lambda: reg.fetch(
-        4, fetch_full=full, fetch_light=light, cube_of=lambda p: p["cube"])) for _ in range(16)]
+    threads = [
+        threading.Thread(
+            target=lambda: reg.fetch(
+                4, fetch_full=full, fetch_light=light, cube_of=lambda p: p["cube"]
+            )
+        )
+        for _ in range(16)
+    ]
     for t in threads:
         t.start()
     for t in threads:
@@ -268,10 +318,21 @@ def test_bundle_records_psf_source_and_writes_readonly_cube(tmp_path):
     with fits.open(io.BytesIO(_mef_bytes())) as hdul:
         shared = np.array(CUBE, copy=True)
         shared.flags.writeable = False
-        payload = _payload_from_irsa_hdul(hdul, psf_cube=shared, psf_header=hdul["PSF"].header.copy())
+        payload = _payload_from_irsa_hdul(
+            hdul, psf_cube=shared, psf_header=hdul["PSF"].header.copy()
+        )
     payload.psf_source = "cal:average_psf_D4_spx_cal-psf-v5-2026-082.fits"
-    b = Bundle(obs_id="o", detector=4, collection="c", access_url="u", cloud_uri="s",
-               time_bounds_lower=0.0, coord_ra=0.0, coord_dec=0.0, cutout=payload)
+    b = Bundle(
+        obs_id="o",
+        detector=4,
+        collection="c",
+        access_url="u",
+        cloud_uri="s",
+        time_bounds_lower=0.0,
+        coord_ra=0.0,
+        coord_dec=0.0,
+        cutout=payload,
+    )
     out = write_bundle(b, tmp_path / "c.fits")
     with fits.open(out) as hdul:
         assert hdul[0].header["PSFSRC"] == payload.psf_source
@@ -290,7 +351,9 @@ def test_cal_discovery_is_memoized_per_detector(monkeypatch):
     monkeypatch.setattr(cal_index, "find_via_sia", fake_sia)
     monkeypatch.setattr(cal_index, "_DISCOVERED", {})
     for ra in (1.0, 2.0, 3.0):
-        got = cal_index.discover_cal_product("spectral_wcs", 4, coord=SkyCoord(ra, 0.0, unit="deg"))
+        got = cal_index.discover_cal_product(
+            "spectral_wcs", 4, coord=SkyCoord(ra, 0.0, unit="deg")
+        )
     assert got == ("http://spectral_wcs/D4", "s3://spectral_wcs/D4") and n["sia"] == 1
     cal_index.discover_cal_product("spectral_wcs", 5)
     cal_index.discover_cal_product("solid_angle_pixel_map", 4)

@@ -20,7 +20,9 @@ from spherex_retrieval.psf import cutout_to_orig
 from spherex_retrieval.wavelength import crop_wavelength_maps
 
 
-def _fake_irsa_hdul(crpix1a: int, crpix2a: int, ny: int = 8, nx: int = 6) -> fits.HDUList:
+def _fake_irsa_hdul(
+    crpix1a: int, crpix2a: int, ny: int = 8, nx: int = 6
+) -> fits.HDUList:
     """Minimal 6-extension MEF mimicking an IRSA cutout-service response."""
     img_hdr = fits.Header()
     # Minimal celestial WCS so WCS(header).celestial is well-defined.
