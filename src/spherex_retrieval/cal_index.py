@@ -30,8 +30,13 @@ import requests
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-CalFamily = Literal["spectral_wcs", "solid_angle_pixel_map", "average_psf", "epsf",
-                    "l3_flux_corrections"]
+CalFamily = Literal[
+    "spectral_wcs",
+    "solid_angle_pixel_map",
+    "average_psf",
+    "epsf",
+    "l3_flux_corrections",
+]
 
 #: Token prefixes per family; a family may have been renamed between releases
 #: (the spectral WCS is ``cal-wcs-v4-...`` under ``qr2`` and ``cal-swcs-v5-...``
@@ -40,8 +45,8 @@ _FAMILY_PREFIXES: dict[str, tuple[str, ...]] = {
     "spectral_wcs": ("cal-wcs", "cal-swcs"),
     "solid_angle_pixel_map": ("cal-sapm",),
     "average_psf": ("cal-psf",),
-    "epsf": ("cal-epsf",),                     # R7 effective PSF library (qr3+)
-    "l3_flux_corrections": ("cal-flxc",),      # QR2 -> R7 per-pixel gain factors
+    "epsf": ("cal-epsf",),  # R7 effective PSF library (qr3+)
+    "l3_flux_corrections": ("cal-flxc",),  # QR2 -> R7 per-pixel gain factors
 }
 
 
@@ -55,7 +60,9 @@ def cal_filename(family: CalFamily, detector: int, token: str) -> str:
     return f"{family}_D{detector}_spx_{token}.fits"
 
 
-def cal_http_url(family: CalFamily, detector: int, token: str, *, data_release: str = "qr2") -> str:
+def cal_http_url(
+    family: CalFamily, detector: int, token: str, *, data_release: str = "qr2"
+) -> str:
     fname = cal_filename(family, detector, token)
     return (
         f"https://irsa.ipac.caltech.edu/ibe/data/spherex/{data_release}/"
@@ -63,11 +70,11 @@ def cal_http_url(family: CalFamily, detector: int, token: str, *, data_release: 
     )
 
 
-def cal_s3_uri(family: CalFamily, detector: int, token: str, *, data_release: str = "qr2") -> str:
+def cal_s3_uri(
+    family: CalFamily, detector: int, token: str, *, data_release: str = "qr2"
+) -> str:
     fname = cal_filename(family, detector, token)
-    return (
-        f"s3://nasa-irsa-spherex/{data_release}/{family}/{token}/{detector}/{fname}"
-    )
+    return f"s3://nasa-irsa-spherex/{data_release}/{family}/{token}/{detector}/{fname}"
 
 
 # --------------------------------------------------------------------------- #
@@ -102,8 +109,9 @@ def local_cal_roots() -> dict[str, Path]:
     return roots
 
 
-def local_cal_product(family: CalFamily, detector: int, *, data_release: str,
-                      cal_token: str | None = None) -> tuple[str, str] | None:
+def local_cal_product(
+    family: CalFamily, detector: int, *, data_release: str, cal_token: str | None = None
+) -> tuple[str, str] | None:
     """``(path, token)`` of a cal product in the local tree of ``data_release``.
 
     ``None`` when no local root is configured for that release. With a root
@@ -125,12 +133,14 @@ def local_cal_product(family: CalFamily, detector: int, *, data_release: str,
             return str(path), token
     raise FileNotFoundError(
         f"no {family} product for D{detector} under the local {data_release} cal root {root}"
-        + (f" (token {cal_token})" if cal_token else ""))
+        + (f" (token {cal_token})" if cal_token else "")
+    )
 
 
 # --------------------------------------------------------------------------- #
 # Strategy 1: SIA2
 # --------------------------------------------------------------------------- #
+
 
 def find_via_sia(
     family: CalFamily,
@@ -148,7 +158,9 @@ def find_via_sia(
 
     try:
         if coord is not None:
-            raw = Irsa.query_sia(pos=(coord, radius), collection=f"spherex_{data_release}_cal")
+            raw = Irsa.query_sia(
+                pos=(coord, radius), collection=f"spherex_{data_release}_cal"
+            )
         else:
             raw = Irsa.query_sia(collection=f"spherex_{data_release}_cal")
     except Exception:
@@ -174,6 +186,7 @@ def find_via_sia(
     s3 = ""
     if "cloud_access" in best_row.colnames:
         from .query import _extract_cloud_uri  # local import to avoid cycle
+
         s3 = _extract_cloud_uri(best_row)
     if not s3:
         s3 = cal_s3_uri(family, detector, best_token, data_release=data_release)
@@ -189,6 +202,7 @@ def _token_from_filename(family: CalFamily, fname: str) -> str | None:
 # Strategy 2: HTML directory listing on irsa.ipac.caltech.edu/ibe
 # --------------------------------------------------------------------------- #
 
+
 def _list_names(path: str, *, timeout: float = 60.0) -> list[str] | None:
     """Child names of an IRSA ``ibe`` directory (NDJSON listing), or ``None``
     when the listing is unreachable."""
@@ -200,6 +214,7 @@ def _list_names(path: str, *, timeout: float = 60.0) -> list[str] | None:
     if resp.status_code != 200:
         return None
     import json as _json
+
     names: list[str] = []
     for line in resp.text.splitlines():
         line = line.strip()
@@ -267,18 +282,27 @@ def discover_cal_product(
     cal_token: str | None = None,
     data_release: str = "qr2",
 ) -> tuple[str, str]:
-    """Memoised :func:`_discover_cal_product`.
+    """Memoized :func:`_discover_cal_product`.
 
     Cal products are detector-wide, so the answer does not depend on
     ``coord``; one SIA2 round trip (0.6-3 s) per (family, detector) per
     process instead of one per cutout.  Failures are not cached.
     """
-    key = (family, detector, cal_token, data_release,
-           str(local_cal_roots().get(data_release, "")))
+    key = (
+        family,
+        detector,
+        cal_token,
+        data_release,
+        str(local_cal_roots().get(data_release, "")),
+    )
     hit = _DISCOVERED.get(key)
     if hit is None:
         hit = _DISCOVERED[key] = _discover_cal_product(
-            family, detector, coord=coord, cal_token=cal_token, data_release=data_release
+            family,
+            detector,
+            coord=coord,
+            cal_token=cal_token,
+            data_release=data_release,
         )
     return hit
 
@@ -305,7 +329,9 @@ def _discover_cal_product(
     RuntimeError
         If none of the strategies yield a valid cal token.
     """
-    local = local_cal_product(family, detector, data_release=data_release, cal_token=cal_token)
+    local = local_cal_product(
+        family, detector, data_release=data_release, cal_token=cal_token
+    )
     if local is not None:
         return local[0], ""
     if cal_token:
@@ -318,8 +344,9 @@ def _discover_cal_product(
     if sia is not None:
         return sia
 
-    token = latest_cal_token_via_listing(family, data_release=data_release,
-                                         detector=detector)
+    token = latest_cal_token_via_listing(
+        family, data_release=data_release, detector=detector
+    )
     if token is None:
         raise RuntimeError(
             f"could not discover {family} cal product for D{detector} "

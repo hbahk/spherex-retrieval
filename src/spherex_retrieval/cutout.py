@@ -55,23 +55,32 @@ class CutoutPayload:
     flags: np.ndarray
     variance: np.ndarray
     zodi: np.ndarray
-    psf_cube: np.ndarray              # (n_zones, S, S): the QR2 121-plane optical cube, or the
-                                      # R7 ePSF arrays (n_zones, 33, 33); read-only when shared
+    psf_cube: np.ndarray  # (n_zones, S, S): the QR2 121-plane optical cube, or the
+    # R7 ePSF arrays (n_zones, 33, 33); read-only when shared
     psf_header: fits.Header
-    image_header: fits.Header         # used for spatial + spectral WCS
-    primary_header: fits.Header       # carries VERSION, OBSID, etc. — needed for the PSF erratum check
+    image_header: fits.Header  # used for spatial + spectral WCS
+    primary_header: (
+        fits.Header
+    )  # carries VERSION, OBSID, etc. — needed for the PSF erratum check
     spatial_wcs: WCS
     detector: int
-    pixel_origin: tuple[int, int]     # (xlo, ylo) of the cutout in original detector pixels (0-based)
-    psf_oversamp: int = 10            # OVERSAMP (QR2) / OVSMPX (R7) from the PSF header
-    psf_source: str = "l2"            # "l2", "cal:<average_psf file>" or "epsf:<epsf file>" when shared
-    psf_kind: str = "optical"         # "optical" (QR2 cube) or "effective" (R7 EPSF table)
-    psf_table: np.ndarray | None = None   # the R7 EPSF bintable rows (zone metadata), else None
+    pixel_origin: tuple[
+        int, int
+    ]  # (xlo, ylo) of the cutout in original detector pixels (0-based)
+    psf_oversamp: int = 10  # OVERSAMP (QR2) / OVSMPX (R7) from the PSF header
+    psf_source: str = (
+        "l2"  # "l2", "cal:<average_psf file>" or "epsf:<epsf file>" when shared
+    )
+    psf_kind: str = "optical"  # "optical" (QR2 cube) or "effective" (R7 EPSF table)
+    psf_table: np.ndarray | None = (
+        None  # the R7 EPSF bintable rows (zone metadata), else None
+    )
 
 
 # --------------------------------------------------------------------------- #
 # IRSA cutout service (default)
 # --------------------------------------------------------------------------- #
+
 
 def build_irsa_cutout_url(access_url: str, coord: SkyCoord, size: u.Quantity) -> str:
     """Append IRSA cutout-service parameters to an L2 MEF access URL."""
@@ -114,7 +123,9 @@ def fetch_irsa_cutout(
             return payload
         product = psf_registry.product(detector)
         if product is not None:
-            for key, val in _psf_fields_from_product(product, payload.psf_header).items():
+            for key, val in _psf_fields_from_product(
+                product, payload.psf_header
+            ).items():
                 setattr(payload, key, val)
             payload.psf_source = psf_registry.source_tag(detector)
         return payload
@@ -132,6 +143,7 @@ def fetch_irsa_cutout(
 
 def _psf_provenance(payload: CutoutPayload) -> str | None:
     from .psf_shared import epsf_source_file
+
     return epsf_source_file(payload.psf_header)
 
 
@@ -151,13 +163,15 @@ def _fetch_irsa_cutout_without_psf(cutout_url: str, psf_product) -> CutoutPayloa
     scanner = _PsfHeaderScanner()
     body, stopped = http_fetch_until(cutout_url, scanner)
     if not stopped:
-        # No PSF header was recognised; the whole MEF is in hand, use it as is.
+        # No PSF header was recognized; the whole MEF is in hand, use it as is.
         with fits.open(io.BytesIO(body)) as hdul:
             return _payload_from_irsa_hdul(hdul)
     psf_start, psf_end = scanner.psf_span
     psf_header = fits.Header.fromstring(body[psf_start:psf_end].decode("ascii"))
     with fits.open(io.BytesIO(body[:psf_start])) as hdul:
-        return _payload_from_irsa_hdul(hdul, psf_product=psf_product, psf_header=psf_header)
+        return _payload_from_irsa_hdul(
+            hdul, psf_product=psf_product, psf_header=psf_header
+        )
 
 
 _FITS_BLOCK = 2880
@@ -175,13 +189,15 @@ class _PsfHeaderScanner:
     ``(start, end)``.
     """
 
-    def __init__(self, extname: str | tuple[str, ...] = PSF_EXTNAMES, fallback_index: int = 5):
+    def __init__(
+        self, extname: str | tuple[str, ...] = PSF_EXTNAMES, fallback_index: int = 5
+    ):
         self.extnames = (extname,) if isinstance(extname, str) else tuple(extname)
         self.fallback_index = fallback_index
         self.psf_span: tuple[int, int] | None = None
-        self.extname: str | None = None   # the name actually found
-        self._hdu_start = 0      # offset of the header being read
-        self._block = 0          # next header block to look for END in
+        self.extname: str | None = None  # the name actually found
+        self._hdu_start = 0  # offset of the header being read
+        self._block = 0  # next header block to look for END in
         self._index = 0
 
     def __call__(self, buf: bytearray) -> int | None:
@@ -189,9 +205,13 @@ class _PsfHeaderScanner:
             end = self._header_end(buf)
             if end is None:
                 return None
-            header = fits.Header.fromstring(bytes(buf[self._hdu_start:end]).decode("ascii"))
+            header = fits.Header.fromstring(
+                bytes(buf[self._hdu_start : end]).decode("ascii")
+            )
             name = str(header.get("EXTNAME", "")).strip().upper()
-            if name in self.extnames or (not name and self._index == self.fallback_index):
+            if name in self.extnames or (
+                not name and self._index == self.fallback_index
+            ):
                 self.psf_span = (self._hdu_start, end)
                 self.extname = name or self.extnames[0]
                 return end
@@ -200,9 +220,9 @@ class _PsfHeaderScanner:
 
     def _header_end(self, buf: bytearray) -> int | None:
         while self._block + _FITS_BLOCK <= len(buf):
-            block = buf[self._block:self._block + _FITS_BLOCK]
+            block = buf[self._block : self._block + _FITS_BLOCK]
             self._block += _FITS_BLOCK
-            if any(block[i:i + 80] == _END_CARD for i in range(0, _FITS_BLOCK, 80)):
+            if any(block[i : i + 80] == _END_CARD for i in range(0, _FITS_BLOCK, 80)):
                 return self._block
         return None
 
@@ -214,8 +234,11 @@ def _padded_data_size(header: fits.Header) -> int:
     n = 1
     for i in range(1, naxis + 1):
         n *= int(header[f"NAXIS{i}"])
-    nbytes = (abs(int(header["BITPIX"])) // 8) * int(header.get("GCOUNT", 1)) * (
-        int(header.get("PCOUNT", 0)) + n)
+    nbytes = (
+        (abs(int(header["BITPIX"])) // 8)
+        * int(header.get("GCOUNT", 1))
+        * (int(header.get("PCOUNT", 0)) + n)
+    )
     return -(-nbytes // _FITS_BLOCK) * _FITS_BLOCK
 
 
@@ -228,9 +251,13 @@ def _psf_fields_from_hdu(psf_hdu) -> dict:
     if name == "EPSF" or psf_hdu.header.get("XTENSION") == "BINTABLE":
         lib = epsf_library_from_hdu(psf_hdu)
         return _psf_fields_from_product(lib, psf_hdu.header.copy())
-    return dict(psf_cube=np.array(psf_hdu.data, copy=True), psf_header=psf_hdu.header.copy(),
-                psf_kind="optical", psf_table=None,
-                psf_oversamp=int(psf_hdu.header.get("OVERSAMP", 10)))
+    return dict(
+        psf_cube=np.array(psf_hdu.data, copy=True),
+        psf_header=psf_hdu.header.copy(),
+        psf_kind="optical",
+        psf_table=None,
+        psf_oversamp=int(psf_hdu.header.get("OVERSAMP", 10)),
+    )
 
 
 def _psf_fields_from_product(product, psf_header: fits.Header) -> dict:
@@ -240,18 +267,32 @@ def _psf_fields_from_product(product, psf_header: fits.Header) -> dict:
 
     if isinstance(product, EpsfLibrary):
         from .psf_shared import epsf_source_file
+
         if epsf_source_file(psf_header) is None:
             # the L2 file did not carry this product (psf_source="epsf-cal"):
             # the library's own header is the PSF header of record
             psf_header = product.header.copy()
-        ox, oy = psf_header.get("OVSMPX", product.header.get("OVSMPX", 5)), \
-            psf_header.get("OVSMPY", product.header.get("OVSMPY", 5))
+        ox, oy = psf_header.get(
+            "OVSMPX", product.header.get("OVSMPX", 5)
+        ), psf_header.get("OVSMPY", product.header.get("OVSMPY", 5))
         if int(ox) != int(oy):
-            raise ValueError(f"anisotropic ePSF oversampling {ox}x{oy} is not supported")
-        return dict(psf_cube=product.cube, psf_header=psf_header, psf_kind="effective",
-                    psf_table=product.table, psf_oversamp=int(ox))
-    return dict(psf_cube=product, psf_header=psf_header, psf_kind="optical", psf_table=None,
-                psf_oversamp=int(psf_header.get("OVERSAMP", 10)))
+            raise ValueError(
+                f"anisotropic ePSF oversampling {ox}x{oy} is not supported"
+            )
+        return dict(
+            psf_cube=product.cube,
+            psf_header=psf_header,
+            psf_kind="effective",
+            psf_table=product.table,
+            psf_oversamp=int(ox),
+        )
+    return dict(
+        psf_cube=product,
+        psf_header=psf_header,
+        psf_kind="optical",
+        psf_table=None,
+        psf_oversamp=int(psf_header.get("OVERSAMP", 10)),
+    )
 
 
 def _payload_from_irsa_hdul(
@@ -317,6 +358,7 @@ def _find_psf_hdu(hdul: fits.HDUList):
 # fsspec / byte-range backend
 # --------------------------------------------------------------------------- #
 
+
 def fetch_fsspec_cutout(
     target: str,
     coord: SkyCoord,
@@ -334,9 +376,12 @@ def fetch_fsspec_cutout(
 
     payload, source = psf_registry.fetch(
         detector,
-        fetch_full=lambda: _fsspec_cutout(target, coord, size, fsspec_kwargs=fsspec_kwargs),
+        fetch_full=lambda: _fsspec_cutout(
+            target, coord, size, fsspec_kwargs=fsspec_kwargs
+        ),
         fetch_light=lambda product: _fsspec_cutout(
-            target, coord, size, fsspec_kwargs=fsspec_kwargs, psf_product=product),
+            target, coord, size, fsspec_kwargs=fsspec_kwargs, psf_product=product
+        ),
         cube_of=lambda p: p.psf_cube,
         provenance_of=_psf_provenance,
     )
@@ -344,14 +389,15 @@ def fetch_fsspec_cutout(
     return payload
 
 
-def irsa_window(x: float, y: float, n: tuple[int, int],
-                shape: tuple[int, int]) -> tuple[slice, slice] | None:
+def irsa_window(
+    x: float, y: float, n: tuple[int, int], shape: tuple[int, int]
+) -> tuple[slice, slice] | None:
     """The detector window IRSA's cutout service returns, as ``(rows, cols)`` slices.
 
     ``(x, y)`` is the target's 0-based pixel position (SIP applied), ``n`` the
     box size in pixels per axis ``(nx, ny)``, ``shape`` the frame ``(ny, nx)``.
     The first pixel along an axis is ``floor(c + 1 - n/2)``: for odd ``n`` the
-    box is centred on the pixel holding the target, for even ``n`` on the
+    box is centered on the pixel holding the target, for even ``n`` on the
     pixel corner nearest to it. The box is trimmed to the frame; ``None`` when
     nothing is left. Measured against the service on QR2 frames for
     ``n`` = 10, 12, 15, 16, 17 and 20 (both parities, both halves of a pixel).
@@ -374,7 +420,7 @@ def box_pixels(size: u.Quantity, wcs: WCS) -> tuple[int, int]:
     """
     from astropy.wcs.utils import proj_plane_pixel_scales
 
-    scales = np.abs(proj_plane_pixel_scales(wcs)) * 3600.0          # arcsec per pixel
+    scales = np.abs(proj_plane_pixel_scales(wcs)) * 3600.0  # arcsec per pixel
     arcsec = size.to_value(u.arcsec)
     return tuple(max(1, int(np.round(arcsec / s))) for s in scales[:2])
 
@@ -427,12 +473,14 @@ def _fsspec_cutout(
 
         header = image_hdu.header
         wcs_full = WCS(header).celestial
-        x, y = wcs_full.world_to_pixel(coord)          # SIP applied
+        x, y = wcs_full.world_to_pixel(coord)  # SIP applied
         full_shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
         window = irsa_window(float(x), float(y), box_pixels(size, wcs_full), full_shape)
         if window is None:
-            raise NoOverlapError(f"the {size} box around {coord.to_string('decimal')} "
-                                 f"does not overlap the frame")
+            raise NoOverlapError(
+                f"the {size} box around {coord.to_string('decimal')} "
+                f"does not overlap the frame"
+            )
         rows, cols = window
 
         image = np.asarray(image_hdu.section[rows, cols])
@@ -467,6 +515,7 @@ def _fsspec_cutout(
 # Dispatcher
 # --------------------------------------------------------------------------- #
 
+
 def fetch_cutout(
     *,
     access_url: str,
@@ -483,10 +532,22 @@ def fetch_cutout(
     product instead of downloading it with the cutout (see
     :mod:`spherex_retrieval.psf_shared`)."""
     if backend == "irsa":
-        return fetch_irsa_cutout(access_url, coord, size, cache_dir=cache_dir,
-                                 psf_registry=psf_registry, detector=detector)
+        return fetch_irsa_cutout(
+            access_url,
+            coord,
+            size,
+            cache_dir=cache_dir,
+            psf_registry=psf_registry,
+            detector=detector,
+        )
     if backend in ("fsspec", "local"):
         target = access_url if backend == "local" else (cloud_uri or access_url)
-        return fetch_fsspec_cutout(target, coord, size, fsspec_kwargs=fsspec_kwargs,
-                                   psf_registry=psf_registry, detector=detector)
+        return fetch_fsspec_cutout(
+            target,
+            coord,
+            size,
+            fsspec_kwargs=fsspec_kwargs,
+            psf_registry=psf_registry,
+            detector=detector,
+        )
     raise ValueError(f"unknown cutout backend: {backend!r}")

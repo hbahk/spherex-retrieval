@@ -31,3 +31,7 @@ spherex-index = "spherex_retrieval.index:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.black]
+# the oldest supported Python, so formatting never uses newer syntax
+target-version = ["py310"]

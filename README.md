@@ -1,7 +1,7 @@
 # spherex-retrieval
 
 Cutout retrieval for SPHEREx Spectral Image MEFs, packaged for forced-photometry workflows.
-One FITS file per overlapping pointing, carrying everything Tractor (or any forward modeller) needs:
+One FITS file per overlapping pointing, carrying everything Tractor (or any forward modeler) needs:
 science image, variance, flags, zodi, a per-cutout PSF subset with its zone lookup,
 and per-pixel wavelength / bandpass maps drawn from the standalone Spectral WCS calibration product.
 
@@ -139,9 +139,9 @@ lam, dlam = wavelength_at(bundle.wavelength, x_cut=x_cut, y_cut=y_cut)
 ```
 
 `resample_psf_to_native` shifts the super-resolved PSF (10× oversampling by default for QR-2)
-and pixel-integrates onto the native detector grid, normalised so it can be passed directly
-to forward-modelling tools.
-Skipping this step makes the effective PSF width and normalisation wrong — see
+and pixel-integrates onto the native detector grid, normalized so it can be passed directly
+to forward-modeling tools.
+Skipping this step makes the effective PSF width and normalization wrong — see
 [spherex_psf.md §9](.claude/spherex_data_desc/spherex_psf.md) in the IRSA tutorials.
 
 ---
@@ -203,13 +203,13 @@ oversampled, with the detector pixel response deconvolved. Forward models must i
 over each native pixel. QR3 and DR1 files (pipeline R7) carry the *effective* PSF instead
 (Anderson & King 2000): the `EPSF` binary table, one 33×33 array at 5× per zone of a 21×21
 lattice (11×41 on D3), with the pixel response *included*. Forward models must sample it at
-the pixel centres (×25 for the fraction per native pixel) and never integrate it again
+the pixel centers (×25 for the fraction per native pixel) and never integrate it again
 (doing so widens the PSF by 1/12 px² of variance, ~30 % in N_eff on SPHEREx).
 
 The bundle layout is the same for both. The PRIMARY header says which kind it holds
 (`PSFKIND = 'OPTICAL' | 'EPSF'`, `OVERSAMP = 10 | 5`, `PSFNORM = 'hr-sum-1'`: each plane sums
 to 1 on its own oversampled grid), and for R7 adds `EPSFCAL` (the calibration source file the
-`EPSF` header names), `DETCOORD` (`'sky'`: arrays and zone centres are in the L2 image
+`EPSF` header names), `DETCOORD` (`'sky'`: arrays and zone centers are in the L2 image
 orientation for every detector, including the X-flipped MWIR ones — no mirroring), and the
 lattice size `ZONENX`/`ZONENY`. `PSF_ZONES` gains the zone widths, star counts and `N_eff`
 from the table. The zone lattice is read from the table, never assumed.
@@ -250,7 +250,7 @@ erratum handling — still comes from the L2 file, and the written bundles are i
 not written to the HTTP cache.
 
 The two published cal versions, `cal-psf-v5-2025-206` and `cal-psf-v5-2026-082`, hold the same
-cube; the later one is a header reissue (zone-centre `XCTR_i`/`YCTR_i` X↔Y erratum fixed,
+cube; the later one is a header reissue (zone-center `XCTR_i`/`YCTR_i` X↔Y erratum fixed,
 `VERSION`/`DATE` added).
 
 No QR2 L2 keyword names the PSF cal a file was built with, so the identity is sampled rather

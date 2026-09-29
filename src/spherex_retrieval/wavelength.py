@@ -30,8 +30,8 @@ from .io import cached_hdu_data, is_s3_uri, open_fits
 
 @dataclass
 class WavelengthMaps:
-    cwave: np.ndarray   # central wavelength, microns
-    cband: np.ndarray   # bandwidth, microns
+    cwave: np.ndarray  # central wavelength, microns
+    cband: np.ndarray  # bandwidth, microns
     source_url: str
 
 
@@ -93,11 +93,12 @@ def find_cal_product(
 # Cropping the CWAVE/CBAND maps
 # --------------------------------------------------------------------------- #
 
+
 def crop_wavelength_maps(
     cal_target: str,
     *,
-    pixel_origin: tuple[int, int],   # (xlo, ylo) 0-based detector pixels
-    cutout_shape: tuple[int, int],   # (ny, nx)
+    pixel_origin: tuple[int, int],  # (xlo, ylo) 0-based detector pixels
+    cutout_shape: tuple[int, int],  # (ny, nx)
     cache_dir=None,
     fsspec_kwargs: dict | None = None,
 ) -> WavelengthMaps:
@@ -114,21 +115,28 @@ def crop_wavelength_maps(
 
     if not is_s3_uri(cal_target):
         # local or HTTP-cached file: crop the whole maps held in memory
-        cwave_full, _ = cached_hdu_data(cal_target, ("CWAVE",), 1, cache_dir=cache_dir,
-                                        fsspec_kwargs=fsspec_kwargs)
-        cband_full, _ = cached_hdu_data(cal_target, ("CBAND",), 2, cache_dir=cache_dir,
-                                        fsspec_kwargs=fsspec_kwargs)
-        cwave = np.array(cwave_full[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32)
-        cband = np.array(cband_full[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32)
+        cwave_full, _ = cached_hdu_data(
+            cal_target, ("CWAVE",), 1, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+        )
+        cband_full, _ = cached_hdu_data(
+            cal_target, ("CBAND",), 2, cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+        )
+        cwave = np.array(cwave_full[ylo : ylo + ny, xlo : xlo + nx], dtype=np.float32)
+        cband = np.array(cband_full[ylo : ylo + ny, xlo : xlo + nx], dtype=np.float32)
         return WavelengthMaps(cwave=cwave, cband=cband, source_url=cal_target)
 
-    with open_fits(cal_target, mode="auto", cache_dir=cache_dir,
-                   fsspec_kwargs=fsspec_kwargs) as hdul:
+    with open_fits(
+        cal_target, mode="auto", cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+    ) as hdul:
         cwave_hdu = hdul["CWAVE"] if "CWAVE" in hdul else hdul[1]
         cband_hdu = hdul["CBAND"] if "CBAND" in hdul else hdul[2]
         # Use .section so we only fetch the relevant pixel box when streaming.
-        cwave = np.asarray(cwave_hdu.section[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32)
-        cband = np.asarray(cband_hdu.section[ylo:ylo + ny, xlo:xlo + nx], dtype=np.float32)
+        cwave = np.asarray(
+            cwave_hdu.section[ylo : ylo + ny, xlo : xlo + nx], dtype=np.float32
+        )
+        cband = np.asarray(
+            cband_hdu.section[ylo : ylo + ny, xlo : xlo + nx], dtype=np.float32
+        )
 
     return WavelengthMaps(cwave=cwave, cband=cband, source_url=cal_target)
 

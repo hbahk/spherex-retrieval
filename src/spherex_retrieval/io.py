@@ -113,6 +113,7 @@ def http_fetch_until(
     way not to receive the trailing HDUs.  Nothing is written to the disk
     cache.  Retries follow :func:`http_download`.
     """
+
     def _attempt() -> tuple[bytes, bool]:
         buf = bytearray()
         with requests.get(url, stream=True, timeout=timeout) as resp:
@@ -137,7 +138,9 @@ def _raise_for_status(resp: requests.Response, url: str) -> None:
     resp.raise_for_status()
 
 
-def _with_retries(attempt: Callable[[], _T], *, url: str, max_retries: int, backoff: float) -> _T:
+def _with_retries(
+    attempt: Callable[[], _T], *, url: str, max_retries: int, backoff: float
+) -> _T:
     """Run ``attempt`` with exponential backoff on transient HTTP failures."""
     import random
     import time
@@ -150,11 +153,15 @@ def _with_retries(attempt: Callable[[], _T], *, url: str, max_retries: int, back
             last_exc = exc
             status = getattr(getattr(exc, "response", None), "status_code", None)
             # Don't retry on 4xx (except 408 Request Timeout, 429 Too Many Requests).
-            if status is not None and status not in _RETRYABLE_STATUS and status not in (408, 429):
+            if (
+                status is not None
+                and status not in _RETRYABLE_STATUS
+                and status not in (408, 429)
+            ):
                 raise
             if i == max_retries - 1:
                 raise
-            time.sleep(backoff * (2 ** i) * random.uniform(0.8, 1.2))
+            time.sleep(backoff * (2**i) * random.uniform(0.8, 1.2))
     raise RuntimeError(f"http request exhausted retries for {url}") from last_exc
 
 
@@ -215,9 +222,14 @@ _HDU_CACHE: OrderedDict = OrderedDict()
 _HDU_CACHE_LOCK = threading.Lock()
 
 
-def cached_hdu_data(target: str, names: tuple[str, ...], fallback_index: int, *,
-                    cache_dir: Path | None = None,
-                    fsspec_kwargs: dict | None = None) -> tuple[np.ndarray, fits.Header]:
+def cached_hdu_data(
+    target: str,
+    names: tuple[str, ...],
+    fallback_index: int,
+    *,
+    cache_dir: Path | None = None,
+    fsspec_kwargs: dict | None = None,
+) -> tuple[np.ndarray, fits.Header]:
     """The full data and header of one HDU of a calibration file, read once per process.
 
     The first EXTNAME in ``names`` present in the file is used, else HDU
@@ -231,7 +243,9 @@ def cached_hdu_data(target: str, names: tuple[str, ...], fallback_index: int, *,
         if hit is not None:
             _HDU_CACHE.move_to_end(key)
             return hit
-    with open_fits(target, mode="auto", cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs) as hdul:
+    with open_fits(
+        target, mode="auto", cache_dir=cache_dir, fsspec_kwargs=fsspec_kwargs
+    ) as hdul:
         hdu = None
         for name in names:
             if name in hdul:

@@ -6,7 +6,13 @@ public API may still change between minor releases.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- American spelling throughout (center, neighbor, normalize, ...) in
+  comments, docstrings, docs and messages; only private and test names
+  changed, no public ones.
+- The code is formatted with black (`[tool.black]` in `pyproject.toml`);
+  `.git-blame-ignore-revs` lists the formatting commit.
 
 ## [0.3.3] — 2026-09-29
 
@@ -107,6 +113,6 @@ No changes to the public interface.
 Initial QR2 retrieval: SIA2 / TAP discovery, IRSA cutout service and
 fsspec/S3 backends, per-cutout MEF bundles (IMAGE, FLAGS, VARIANCE, ZODI,
 PSF, PSF_ZONES, CWAVE, CBAND, SAPM), the QR2 PSF-header erratum fix,
-zone-subsetted PSF cubes with a neighbour ring, the correct cutout→detector
+zone-subsetted PSF cubes with a neighbor ring, the correct cutout→detector
 pixel origin (`CRPIX1A`/`CRPIX2A`), and the shared per-detector PSF cube
 (`psf_source="cal"`) that stops each cutout download before the PSF data.

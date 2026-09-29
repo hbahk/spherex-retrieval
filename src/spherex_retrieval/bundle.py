@@ -55,6 +55,7 @@ class Bundle:
 # On-disk layout
 # --------------------------------------------------------------------------- #
 
+
 def cutout_filename(bundle: Bundle, cutout_index: int) -> str:
     safe_obs = bundle.obs_id.replace("/", "_") if bundle.obs_id else "unknown"
     return f"cutout_{cutout_index:04d}_{safe_obs}_D{bundle.detector}.fits"
@@ -89,12 +90,12 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
         OVERSAMP oversampling of the PSF planes (10 or 5)
         PSFNORM  'hr-sum-1': each plane sums to 1 on its own oversampled grid
         EPSFCAL  the ePSF calibration source file (R7 only)
-        DETCOORD 'sky' (R7 only): the arrays and zone centres are in the L2
+        DETCOORD 'sky' (R7 only): the arrays and zone centers are in the L2
                  image orientation for every detector, no mirroring needed
         ZONENX / ZONENY  lattice size of the full product (11x11, 21x21, 11x41)
 
     ``PSF_ZONES`` carries ``zone_id, x, y, plane_idx`` (0-based detector px
-    centres) and, for the R7 product, ``xwidth, ywidth, nstar, neff``.
+    centers) and, for the R7 product, ``xwidth, ywidth, nstar, neff``.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,25 +131,43 @@ def bundle_hdulist(bundle: Bundle) -> fits.HDUList:
         h["PSFSRC"] = (bundle.cutout.psf_source[:68], "PSF cube origin")
         fc = bundle.extras.get("flux_correction")
         if fc:
-            h["FLXCORR"] = (str(fc["token"])[:68], "R7 flux correction applied to IMAGE/VARIANCE")
-            h["FLXCMED"] = (float(fc["median"]), "median correction factor over the cutout")
+            h["FLXCORR"] = (
+                str(fc["token"])[:68],
+                "R7 flux correction applied to IMAGE/VARIANCE",
+            )
+            h["FLXCMED"] = (
+                float(fc["median"]),
+                "median correction factor over the cutout",
+            )
             if fc.get("source_file"):
-                h["FLXCSRC"] = (str(fc["source_file"])[:68], "flux-correction calibration source file")
-            h["FLXCNREP"] = (int(fc.get("n_replaced", 0)), "wild factors replaced by their row median")
+                h["FLXCSRC"] = (
+                    str(fc["source_file"])[:68],
+                    "flux-correction calibration source file",
+                )
+            h["FLXCNREP"] = (
+                int(fc.get("n_replaced", 0)),
+                "wild factors replaced by their row median",
+            )
         effective = bundle.cutout.psf_kind == "effective"
-        h["PSFKIND"] = ("EPSF" if effective else "OPTICAL",
-                        "EPSF: pixel response included, point-sample it")
+        h["PSFKIND"] = (
+            "EPSF" if effective else "OPTICAL",
+            "EPSF: pixel response included, point-sample it",
+        )
         h["PSFNORM"] = ("hr-sum-1", "each PSF plane sums to 1 on its oversampled grid")
         if effective:
             from .psf_shared import epsf_source_file
+
             src = epsf_source_file(bundle.cutout.psf_header)
             if src:
                 h["EPSFCAL"] = (src[:68], "ePSF calibration source file")
             if "DETCOORD" in bundle.cutout.psf_header:
-                h["DETCOORD"] = (str(bundle.cutout.psf_header["DETCOORD"]),
-                                 "ePSF coordinate frame (matches the L2 image)")
+                h["DETCOORD"] = (
+                    str(bundle.cutout.psf_header["DETCOORD"]),
+                    "ePSF coordinate frame (matches the L2 image)",
+                )
         if bundle.cutout.psf_table is not None:
             from .psf import zone_lattice, zone_table_from_epsf
+
             ix, iy = zone_lattice(zone_table_from_epsf(bundle.cutout.psf_table))
             h["ZONENX"] = (int(ix.max()), "PSF zone lattice size along x")
             h["ZONENY"] = (int(iy.max()), "PSF zone lattice size along y")
@@ -168,12 +187,14 @@ def bundle_hdulist(bundle: Bundle) -> fits.HDUList:
         psf_zones_hdu = fits.BinTableHDU(bundle.psf_subset.lookup, name="PSF_ZONES")
     elif cut.psf_table is not None:
         from .psf import zone_table_from_epsf
+
         full = zone_table_from_epsf(cut.psf_table)
         full["plane_idx"] = np.arange(len(full), dtype=np.int32)
         psf_zones_hdu = fits.BinTableHDU(full, name="PSF_ZONES")
     else:
-        psf_zones_hdu = fits.BinTableHDU(Table(names=("zone_id", "x", "y", "plane_idx")),
-                                         name="PSF_ZONES")
+        psf_zones_hdu = fits.BinTableHDU(
+            Table(names=("zone_id", "x", "y", "plane_idx")), name="PSF_ZONES"
+        )
 
     hdus = [primary, image_hdu, flags_hdu, var_hdu, zodi_hdu, psf_hdu, psf_zones_hdu]
 
@@ -203,9 +224,24 @@ def bundle_bytes(bundle: Bundle) -> bytes:
     return buf.getvalue()
 
 
-_EPSF_HEADER_KEYS = ("DETECTOR", "OVSMPX", "OVSMPY", "MAXIT", "SMOOTH", "JUNKCLN", "KEEPNAT",
-                     "KEEPOS", "DETCOORD", "ORDERING", "BINSRC", "GEOMSRC", "NEFFSRC", "WVMSRC",
-                     "CWAVESRC", "CBANDSRC")
+_EPSF_HEADER_KEYS = (
+    "DETECTOR",
+    "OVSMPX",
+    "OVSMPY",
+    "MAXIT",
+    "SMOOTH",
+    "JUNKCLN",
+    "KEEPNAT",
+    "KEEPOS",
+    "DETCOORD",
+    "ORDERING",
+    "BINSRC",
+    "GEOMSRC",
+    "NEFFSRC",
+    "WVMSRC",
+    "CWAVESRC",
+    "CBANDSRC",
+)
 
 
 def _psf_image_header(psf_header: fits.Header, psf_kind: str) -> fits.Header:

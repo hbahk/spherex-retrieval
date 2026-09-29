@@ -1,4 +1,4 @@
-"""zone_margin: keep the neighbouring PSF zones, not just the spanned ones.
+"""zone_margin: keep the neighboring PSF zones, not just the spanned ones.
 
 Without a margin ``subset_zones_for_cutout`` keeps only the zone-index
 rectangle between the zones nearest the cutout's two corners. For a cutout
@@ -6,12 +6,12 @@ smaller than the ~185 detector px zone pitch both corners resolve to the same
 zone, so a single plane is stored — enough to pick a nearest-zone PSF, not
 enough for downstream photometry to interpolate between zones.
 """
+
 import numpy as np
 import pytest
 from astropy.io import fits
 
-from spherex_retrieval.psf import (ZONE_X_INDEX, ZONE_Y_INDEX,
-                                   subset_zones_for_cutout)
+from spherex_retrieval.psf import ZONE_X_INDEX, ZONE_Y_INDEX, subset_zones_for_cutout
 
 PITCH = 2048.0 / 11.0
 
@@ -42,16 +42,18 @@ def test_small_cutout_gains_a_zone_ring(cube):
 def test_margin_is_the_default(cube):
     hdr = _header()
     kw = dict(cutout_shape=(100, 100), pixel_origin=(1000, 1000))
-    assert (len(subset_zones_for_cutout(cube, hdr, **kw).lookup)
-            == len(subset_zones_for_cutout(cube, hdr, zone_margin=1, **kw).lookup))
+    assert len(subset_zones_for_cutout(cube, hdr, **kw).lookup) == len(
+        subset_zones_for_cutout(cube, hdr, zone_margin=1, **kw).lookup
+    )
 
 
 def test_margin_clips_at_the_lattice_edge(cube):
     """A corner cutout cannot grow past the 11x11 grid."""
     hdr = _header()
-    sub = subset_zones_for_cutout(cube, hdr, cutout_shape=(100, 100),
-                                  pixel_origin=(0, 0), zone_margin=1)
-    assert len(sub.lookup) == 4                       # 2x2, not 3x3
+    sub = subset_zones_for_cutout(
+        cube, hdr, cutout_shape=(100, 100), pixel_origin=(0, 0), zone_margin=1
+    )
+    assert len(sub.lookup) == 4  # 2x2, not 3x3
     assert sub.zone_grid_xy[:, 0].min() >= ZONE_X_INDEX.min()
     assert sub.zone_grid_xy[:, 1].min() >= ZONE_Y_INDEX.min()
 
@@ -62,7 +64,9 @@ def test_margin_zero_reproduces_the_old_subset(cube):
     kw = dict(cutout_shape=(600, 600), pixel_origin=(700, 700))
     old = subset_zones_for_cutout(cube, hdr, zone_margin=0, **kw)
     new = subset_zones_for_cutout(cube, hdr, zone_margin=1, **kw)
-    assert set(np.asarray(old.lookup["zone_id"])) <= set(np.asarray(new.lookup["zone_id"]))
+    assert set(np.asarray(old.lookup["zone_id"])) <= set(
+        np.asarray(new.lookup["zone_id"])
+    )
     assert len(new.lookup) > len(old.lookup)
     # planes are carried through unchanged, just more of them
     ids = list(np.asarray(old.lookup["zone_id"]))
