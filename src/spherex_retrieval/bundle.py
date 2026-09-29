@@ -89,12 +89,12 @@ def write_bundle(bundle: Bundle, path: Path) -> Path:
         OVERSAMP oversampling of the PSF planes (10 or 5)
         PSFNORM  'hr-sum-1': each plane sums to 1 on its own oversampled grid
         EPSFCAL  the ePSF calibration source file (R7 only)
-        DETCOORD 'sky' (R7 only): the arrays and zone centres are in the L2
+        DETCOORD 'sky' (R7 only): the arrays and zone centers are in the L2
                  image orientation for every detector, no mirroring needed
         ZONENX / ZONENY  lattice size of the full product (11x11, 21x21, 11x41)
 
     ``PSF_ZONES`` carries ``zone_id, x, y, plane_idx`` (0-based detector px
-    centres) and, for the R7 product, ``xwidth, ywidth, nstar, neff``.
+    centers) and, for the R7 product, ``xwidth, ywidth, nstar, neff``.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

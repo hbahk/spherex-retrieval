@@ -151,7 +151,7 @@ def _fetch_irsa_cutout_without_psf(cutout_url: str, psf_product) -> CutoutPayloa
     scanner = _PsfHeaderScanner()
     body, stopped = http_fetch_until(cutout_url, scanner)
     if not stopped:
-        # No PSF header was recognised; the whole MEF is in hand, use it as is.
+        # No PSF header was recognized; the whole MEF is in hand, use it as is.
         with fits.open(io.BytesIO(body)) as hdul:
             return _payload_from_irsa_hdul(hdul)
     psf_start, psf_end = scanner.psf_span
@@ -351,7 +351,7 @@ def irsa_window(x: float, y: float, n: tuple[int, int],
     ``(x, y)`` is the target's 0-based pixel position (SIP applied), ``n`` the
     box size in pixels per axis ``(nx, ny)``, ``shape`` the frame ``(ny, nx)``.
     The first pixel along an axis is ``floor(c + 1 - n/2)``: for odd ``n`` the
-    box is centred on the pixel holding the target, for even ``n`` on the
+    box is centered on the pixel holding the target, for even ``n`` on the
     pixel corner nearest to it. The box is trimmed to the frame; ``None`` when
     nothing is left. Measured against the service on QR2 frames for
     ``n`` = 10, 12, 15, 16, 17 and 20 (both parities, both halves of a pixel).

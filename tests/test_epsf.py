@@ -48,7 +48,7 @@ SOURCE_FILE = "epsf_4_20260507.fits"
 
 
 def _epsf_table(nx=21, ny=21, det=4, seed=1):
-    """A synthetic EPSF bintable: BINX/BINY lattice, 0-based centres, unit-sum arrays."""
+    """A synthetic EPSF bintable: BINX/BINY lattice, 0-based centers, unit-sum arrays."""
     rng = np.random.default_rng(seed)
     xw, yw = 2040.0 / nx, 2040.0 / ny
     binx, biny, arrs = [], [], []

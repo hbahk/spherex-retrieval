@@ -278,7 +278,7 @@ def test_bundle_records_psf_source_and_writes_readonly_cube(tmp_path):
         np.testing.assert_array_equal(hdul["PSF"].data, CUBE)
 
 
-def test_cal_discovery_is_memoised_per_detector(monkeypatch):
+def test_cal_discovery_is_memoized_per_detector(monkeypatch):
     from spherex_retrieval import cal_index
 
     n = {"sia": 0}

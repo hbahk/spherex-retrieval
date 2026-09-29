@@ -11,7 +11,7 @@ lattice is read from the table, never assumed.  This module provides:
 * :func:`build_zone_table` — turn the QR2 header into a tidy table;
   :func:`zone_table_from_epsf` does the same for the R7 table.
 * :func:`zone_lattice` — 1-based (ix, iy) lattice indices of every zone,
-  inferred from the distinct centre coordinates of either table.
+  inferred from the distinct center coordinates of either table.
 * :func:`fix_psf_header_if_needed` — apply the QR-2 PSF erratum rewrite
   for spectral images with ``VERSION <= 6.5.5`` (no ``+psffix1`` local
   tag).  See https://irsa.ipac.caltech.edu/data/SPHEREx/docs/psfhdrerr.html
@@ -20,7 +20,7 @@ lattice is read from the table, never assumed.  This module provides:
 * :func:`select_zone_for_source` — pick the best PSF plane for a source
   given its position (in either cutout or original detector pixels).
 * :func:`resample_psf_to_native` — downsample an oversampled PSF onto the
-  native detector grid for use with forward-modelling tools (Tractor).
+  native detector grid for use with forward-modeling tools (Tractor).
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def zone_table_from_epsf(psf_table: np.ndarray) -> Table:
 
 def zone_lattice(table: Table) -> tuple[np.ndarray, np.ndarray]:
     """1-based lattice indices ``(ix, iy)`` of every zone row, from the ranks of
-    its centre among the distinct centre coordinates (11x11 for QR2, 21x21 or
+    its center among the distinct center coordinates (11x11 for QR2, 21x21 or
     11x41 for R7)."""
     x = np.asarray(table["x"], dtype=np.float64)
     y = np.asarray(table["y"], dtype=np.float64)
@@ -312,7 +312,7 @@ def _collect_axis_values(
 
 
 # --------------------------------------------------------------------------- #
-# Oversampled-PSF -> native-grid resampler (for forward-modelling)
+# Oversampled-PSF -> native-grid resampler (for forward-modeling)
 # --------------------------------------------------------------------------- #
 
 def resample_psf_to_native(
@@ -327,7 +327,7 @@ def resample_psf_to_native(
 
     The PSF cube delivered in the L2 MEF is super-resolved by
     ``OVERSAMP`` (=10 for QR-2): 10 PSF pixels span one native detector
-    pixel.  Forward-modelling tools (Tractor) need the PSF
+    pixel.  Forward-modeling tools (Tractor) need the PSF
     pixel-integrated at the native resolution and evaluated at the source
     sub-pixel phase.
 
@@ -343,10 +343,10 @@ def resample_psf_to_native(
         Side length of the output PSF in native pixels.  Defaults to the
         smallest ODD size covering the input, ``11`` for the QR-2 default
         (101 oversampled px = 10.1 native px).  The size must be odd for the
-        result to be centred at all: the PSF centre lands on output index
+        result to be centered at all: the PSF center lands on output index
         ``output_size // 2``, and only for odd sizes is that the array's
-        geometric centre.  An even size is accepted but warns, because a
-        caller using the usual "array centre = source position" convention
+        geometric center.  An even size is accepted but warns, because a
+        caller using the usual "array center = source position" convention
         would then be off by half a native pixel.
     normalize : bool
         If True (default), rescale to sum to 1.
@@ -361,8 +361,8 @@ def resample_psf_to_native(
             output_size += 1
     elif output_size % 2 == 0:
         warnings.warn(
-            f"output_size={output_size} is even, so the PSF centre lands on "
-            f"index {output_size // 2} while the array's geometric centre is "
+            f"output_size={output_size} is even, so the PSF center lands on "
+            f"index {output_size // 2} while the array's geometric center is "
             f"{(output_size - 1) / 2} — half a native pixel apart. Pass an "
             "odd output_size unless you are tracking that offset yourself.",
             stacklevel=2,
@@ -373,17 +373,17 @@ def resample_psf_to_native(
     dy_over = sub_pixel_shift[1] * oversamp
     shifted = _shift_image(arr, dx=dx_over, dy=dy_over)
 
-    # Pixel-integrate onto a grid CENTRED on the array centre (see
-    # _integrate_centred).  The previous implementation reshaped into
+    # Pixel-integrate onto a grid CENTERED on the array center (see
+    # _integrate_centered).  The previous implementation reshaped into
     # ``output_size x oversamp`` blocks aligned to index 0, which forced two
     # asymmetries whenever ``output_size * oversamp != n_over``: it cropped
     # with ``start = (n_over - needed) // 2`` -- for the QR-2 default
-    # 101 -> 100 that drops only the LAST row and column, not a centred crop --
+    # 101 -> 100 that drops only the LAST row and column, not a centered crop --
     # and it padded with ``((0, pad), (0, pad))``, i.e. entirely on the
     # bottom/right.  Either one displaces the PSF relative to the output array
-    # centre by a fraction of an oversampled pixel, which a forced-photometry
+    # center by a fraction of an oversampled pixel, which a forced-photometry
     # caller then reads as an astrometric offset.
-    out = _integrate_centred(shifted, oversamp=oversamp,
+    out = _integrate_centered(shifted, oversamp=oversamp,
                              output_size=output_size)
 
     if normalize:
@@ -393,22 +393,22 @@ def resample_psf_to_native(
     return out
 
 
-def _integrate_centred(
+def _integrate_centered(
     arr: np.ndarray, *, oversamp: int, output_size: int
 ) -> np.ndarray:
-    """Pixel-integrate an oversampled image onto a grid centred on its centre.
+    """Pixel-integrate an oversampled image onto a grid centered on its center.
 
     Output pixel ``m`` integrates the continuous window of width ``oversamp``
-    centred on input index ``c + oversamp * (m - output_size // 2)``, where
-    ``c = (n - 1) / 2`` is the input's geometric centre.  So:
+    centered on input index ``c + oversamp * (m - output_size // 2)``, where
+    ``c = (n - 1) / 2`` is the input's geometric center.  So:
 
     * the output grid is uniform, spacing exactly ``oversamp`` input px;
-    * output index ``output_size // 2`` is centred on the input centre, for any
+    * output index ``output_size // 2`` is centered on the input center, for any
       combination of input size, ``oversamp`` and ``output_size`` parities;
     * flux is conserved up to what falls outside the array (zero-padded).
 
     Parity is handled by weights rather than by cropping.  A width-``oversamp``
-    window centred on a pixel centre covers whole pixels when ``oversamp`` is
+    window centered on a pixel center covers whole pixels when ``oversamp`` is
     odd, and covers two half-pixels at its ends when ``oversamp`` is even (for
     ``oversamp=10``: weights ``0.5, 1 x 9, 0.5``, summing to 10).  Reshaping
     into aligned blocks, as the previous implementation did, cannot express
@@ -418,17 +418,17 @@ def _integrate_centred(
     n = a.shape[0]
     half = oversamp / 2.0
     # weight of input pixel j (covering [j-0.5, j+0.5]) inside a window of
-    # width `oversamp` centred at 0 -> overlap length, computed once
+    # width `oversamp` centered at 0 -> overlap length, computed once
     off = np.arange(-int(np.ceil(half)), int(np.ceil(half)) + 1)
     w = np.clip(np.minimum(off + 0.5, half) - np.maximum(off - 0.5, -half),
                 0.0, None)
     c = (n - 1) / 2.0
-    centres = c + oversamp * (np.arange(output_size) - output_size // 2)
-    # nearest input index to each window centre, plus the fractional remainder
-    base = np.rint(centres).astype(int)
-    frac = centres - base
+    centers = c + oversamp * (np.arange(output_size) - output_size // 2)
+    # nearest input index to each window center, plus the fractional remainder
+    base = np.rint(centers).astype(int)
+    frac = centers - base
     if np.any(np.abs(frac) > 1e-9):
-        # window centres land between input pixels: interpolate the weights
+        # window centers land between input pixels: interpolate the weights
         idx = base[:, None] + off[None, :]
         wgt = np.empty((output_size, off.size), dtype=np.float64)
         for m in range(output_size):

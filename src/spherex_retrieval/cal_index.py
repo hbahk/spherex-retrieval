@@ -267,7 +267,7 @@ def discover_cal_product(
     cal_token: str | None = None,
     data_release: str = "qr2",
 ) -> tuple[str, str]:
-    """Memoised :func:`_discover_cal_product`.
+    """Memoized :func:`_discover_cal_product`.
 
     Cal products are detector-wide, so the answer does not depend on
     ``coord``; one SIA2 round trip (0.6-3 s) per (family, detector) per

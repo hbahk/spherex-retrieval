@@ -17,7 +17,7 @@ IMAGE by the factor and its VARIANCE by the factor squared. The ZODI plane is
 a model in physical units and is left alone: correcting the image is what
 makes ``IMAGE - ZODI`` consistent again. Wild factors are replaced by the
 median of their detector row (the pixels they belong to are flagged anyway),
-so a bad pixel cannot poison its neighbours through the background fit.
+so a bad pixel cannot poison its neighbors through the background fit.
 """
 
 from __future__ import annotations

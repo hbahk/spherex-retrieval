@@ -1,4 +1,4 @@
-"""zone_margin: keep the neighbouring PSF zones, not just the spanned ones.
+"""zone_margin: keep the neighboring PSF zones, not just the spanned ones.
 
 Without a margin ``subset_zones_for_cutout`` keeps only the zone-index
 rectangle between the zones nearest the cutout's two corners. For a cutout

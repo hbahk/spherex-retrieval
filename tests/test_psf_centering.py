@@ -1,12 +1,12 @@
-"""resample_psf_to_native must not displace the PSF relative to the output centre.
+"""resample_psf_to_native must not displace the PSF relative to the output center.
 
 Regression tests for the 2026-07-30 fix.  The previous implementation reshaped
 the oversampled array into ``output_size x oversamp`` blocks aligned to index 0,
 which forced an asymmetric crop (``start = (101 - 100) // 2 == 0`` dropped only
 the LAST row/column) or an end-only pad (``((0, pad), (0, pad))``).  Either one
 moves the PSF a fraction of an oversampled pixel away from the output array
-centre -- and a forced-photometry caller, which anchors the kernel by its array
-centre, reads that as an astrometric offset.
+center -- and a forced-photometry caller, which anchors the kernel by its array
+center, reads that as an astrometric offset.
 """
 import numpy as np
 import pytest
@@ -27,7 +27,7 @@ def _kernels():
 
 
 def _centroid(a):
-    """Flux centroid minus the array's geometric centre, in the array's px."""
+    """Flux centroid minus the array's geometric center, in the array's px."""
     a = np.asarray(a, dtype=float)
     yy, xx = np.indices(a.shape, dtype=float)
     c = (a.shape[0] - 1) / 2.0
@@ -36,10 +36,10 @@ def _centroid(a):
 
 
 def test_default_output_size_is_odd():
-    """Only an odd size can put a PIXEL on the array's geometric centre.
+    """Only an odd size can put a PIXEL on the array's geometric center.
 
     101 oversampled px is 10.1 native px; the old default floor(101/10) = 10 is
-    even, so the PSF centre landed on index 5 while the geometric centre is 4.5
+    even, so the PSF center landed on index 5 while the geometric center is 4.5
     — half a native pixel apart, by construction.
     """
     out = resample_psf_to_native(_kernels()[0])
@@ -47,7 +47,7 @@ def test_default_output_size_is_odd():
     assert out.shape[0] % 2 == 1
 
 
-def test_symmetric_input_stays_symmetric_and_centred():
+def test_symmetric_input_stays_symmetric_and_centered():
     out = resample_psf_to_native(_kernels()[0])
     np.testing.assert_allclose(out, out[::-1, ::-1], atol=1e-12)
     assert np.unravel_index(np.argmax(out), out.shape) == (5, 5)
@@ -59,7 +59,7 @@ def test_asymmetric_centroid_is_preserved():
     """An asymmetric kernel's centroid must survive the resampling.
 
     This is the property the asymmetric crop/pad broke: it shifted the whole
-    kernel, so the offset a caller measured was part resampling artefact.
+    kernel, so the offset a caller measured was part resampling artifact.
     """
     _, asym = _kernels()
     want = np.array(_centroid(asym)) / OVERSAMP        # native px
@@ -87,10 +87,10 @@ def test_sub_pixel_shift_lands_where_requested(dx):
 
 
 def test_odd_oversamp_needs_no_half_pixel_weights():
-    """With odd oversamp the window covers whole pixels; check it still centres.
+    """With odd oversamp the window covers whole pixels; check it still centers.
 
-    Build a centred 99x99 kernel rather than slicing the 101x101 one: a
-    ``[:99, :99]`` crop is itself off-centre, which would test the crop and not
+    Build a centered 99x99 kernel rather than slicing the 101x101 one: a
+    ``[:99, :99]`` crop is itself off-center, which would test the crop and not
     the resampler.
     """
     n = 99
