@@ -88,6 +88,7 @@ def retrieve(
     remote_timeout: float = 120.0,
     index=None,
     archive_root: Path | str | None = None,
+    release: str | None = None,
     cal_roots: dict[str, Path | str] | None = None,
 ) -> tuple[list[Bundle], Path]:
     """Retrieve all SPHEREx cutouts overlapping ``coord`` within ``size``.
@@ -99,11 +100,16 @@ def retrieve(
         :mod:`spherex_retrieval.index`) and pairs with
         ``cutout_backend="local"``, which crops the files in place.
     index : path or pyarrow.Table, optional
-        The local archive index (``spherex-index build``); required by
-        ``query_backend="local"``.
+        The local archive index (``spherex-index build``, or any frame table
+        through :func:`~spherex_retrieval.index.index_from_table`); required
+        by ``query_backend="local"``.
     archive_root : path, optional
         Root the index paths are relative to; defaults to the one recorded
         in the index.
+    release : str, optional
+        Data release of the indexed frames (e.g. ``"qr3"``), which decides
+        their PSF kind and calibration release; defaults to the one recorded
+        in the index. Applies to ``query_backend="local"`` only.
     cal_roots : dict, optional
         Local calibration trees by release, e.g. ``{"qr2": ".../repo"}``,
         laid out like IRSA's ``spherex/<release>/``. Sets the process-wide
@@ -213,6 +219,7 @@ def retrieve(
         bandpass=bandpass,
         index=index,
         archive_root=archive_root,
+        release=release,
     )
 
     if len(overlap) == 0:

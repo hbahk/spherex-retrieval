@@ -367,6 +367,7 @@ def find_overlapping(
     timeout: float = 120.0,
     index=None,
     archive_root=None,
+    release: str | None = None,
 ) -> Table:
     """Find all L2 MEFs covering ``coord`` across the requested collections.
 
@@ -376,13 +377,14 @@ def find_overlapping(
 
     ``backend="local"`` searches a local archive ``index`` instead (see
     :func:`query_local`); ``collections`` does not apply there — the index is
-    one archive of one release.
+    one archive of one release (``release``, else the one the index records).
     """
     if backend == "local":
         if index is None:
             raise ValueError("backend='local' needs index= (an index parquet or table)")
         return _drop_duplicate_files(query_local(coord, size, index=index,
-                                                 archive_root=archive_root, bandpass=bandpass))
+                                                 archive_root=archive_root, release=release,
+                                                 bandpass=bandpass))
     tables = []
     for col in collections:
         if backend == "astroquery":
