@@ -6,6 +6,10 @@ public API may still change between minor releases.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.4] — 2026-09-30
+
 ### Changed
 
 - American spelling throughout (center, neighbor, normalize, ...) in
