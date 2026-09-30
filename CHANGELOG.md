@@ -8,6 +8,10 @@ public API may still change between minor releases.
 
 Nothing yet.
 
+## [0.3.5] — 2026-09-30
+
+No changes to the public interface.
+
 ## [0.3.4] — 2026-09-30
 
 ### Changed
