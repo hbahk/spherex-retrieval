@@ -6,7 +6,16 @@ public API may still change between minor releases.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- `retrieve(query_backend=...)` and `find_overlapping(backend=...)` also take
+  a function `(coord, size, *, bandpass) -> Table` that returns frames in the
+  canonical discovery columns, so a site can find frames in its own catalog
+  of L2 files; with `cutout_backend="local"` their `access_url` may be a path
+  on disk. It replaces the `"local"` query backend and the `index=`,
+  `archive_root=` and `release=` arguments of `retrieve()`.
+  `cutout_backend="local"` and the local calibration trees (`cal_roots=`,
+  `set_local_cal_roots()`, `SPHEREX_CAL_ROOTS`) are unchanged.
 
 ## [0.3.5] — 2026-09-30
 
