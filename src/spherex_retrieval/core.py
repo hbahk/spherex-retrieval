@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import astropy.units as u
 import numpy as np
 from astropy.coordinates import SkyCoord
-from astropy.table import Row
+from astropy.table import Row, Table
 
 from .bundle import (
     Bundle,
@@ -47,7 +47,9 @@ from .query import (
 from .sapm import crop_sapm, find_sapm_product
 from .wavelength import crop_wavelength_maps, find_cal_product
 
-QueryBackend = Literal["astroquery", "pyvo", "local"]
+#: A discovery service, or a function ``(coord, size, *, bandpass) -> Table``
+#: returning frames in the canonical columns of :mod:`spherex_retrieval.query`.
+QueryBackend = Literal["astroquery", "pyvo"] | Callable[..., Table]
 
 #: Release whose detector calibrations (spectral WCS, SAPM, flux corrections)
 #: are applied to every image by default: the newest on-sky calibration. Bump
@@ -86,30 +88,19 @@ def retrieve(
     cache_dir: Path | str | None = None,
     fsspec_kwargs: dict | None = None,
     remote_timeout: float = 120.0,
-    index=None,
-    archive_root: Path | str | None = None,
-    release: str | None = None,
     cal_roots: dict[str, Path | str] | None = None,
 ) -> tuple[list[Bundle], Path]:
     """Retrieve all SPHEREx cutouts overlapping ``coord`` within ``size``.
 
     Parameters
     ----------
-    query_backend : {"astroquery", "pyvo", "local"}
-        ``"local"`` searches a local archive ``index`` (see
-        :mod:`spherex_retrieval.index`) and pairs with
-        ``cutout_backend="local"``, which crops the files in place.
-    index : path or pyarrow.Table, optional
-        The local archive index (``spherex-index build``, or any frame table
-        through :func:`~spherex_retrieval.index.index_from_table`); required
-        by ``query_backend="local"``.
-    archive_root : path, optional
-        Root the index paths are relative to; defaults to the one recorded
-        in the index.
-    release : str, optional
-        Data release of the indexed frames (e.g. ``"qr3"``), which decides
-        their PSF kind and calibration release; defaults to the one recorded
-        in the index. Applies to ``query_backend="local"`` only.
+    query_backend : {"astroquery", "pyvo"} or callable
+        The discovery service; or a function called as
+        ``query_backend(coord, size, bandpass=bandpass)`` that returns the
+        frames in the canonical columns of :mod:`spherex_retrieval.query`
+        (``collection`` decides each frame's data release). With
+        ``cutout_backend="local"`` its ``access_url`` may be a path to an L2
+        file on disk, which is then cropped in place.
     cal_roots : dict, optional
         Local calibration trees by release, e.g. ``{"qr2": ".../repo"}``,
         laid out like IRSA's ``spherex/<release>/``. Sets the process-wide
@@ -228,9 +219,6 @@ def retrieve(
         backend=query_backend,
         collections=tuple(collections),
         bandpass=bandpass,
-        index=index,
-        archive_root=archive_root,
-        release=release,
     )
 
     if len(overlap) == 0:
