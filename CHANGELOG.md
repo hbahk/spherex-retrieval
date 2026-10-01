@@ -6,6 +6,10 @@ public API may still change between minor releases.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] — 2026-10-01
+
 ### Changed
 
 - `retrieve(query_backend=...)` and `find_overlapping(backend=...)` also take
