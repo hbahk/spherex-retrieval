@@ -6,7 +6,11 @@ public API may still change between minor releases.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `spherex_retrieval.__version__` reported `0.1.0` in every release; it now
+  comes from `spherex_retrieval/version.py`, which `pyproject.toml` also reads,
+  so the two cannot drift apart.
 
 ## [0.4.0] — 2026-10-01
 
